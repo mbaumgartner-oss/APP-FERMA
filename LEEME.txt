@@ -1,0 +1,38 @@
+APP FERMA - Carga de fases (exportar, imprimir y subir)
+Versión 0.6 · 11/11/2026 · La mantiene MB
+(0.6: arreglos antes del piloto.
+      - Las rejas (_gr, con PDF y sin CNC) ya se pueden subir.
+      - Los archivos que crea Windows o el Drive (desktop.ini, ~$...xlsx) no se suben y no dan falsas alarmas.
+      - Una fase APROBADA o ya SUBIDA no se vuelve a exportar ("Retomar" incluido): los cambios van por reentrega.
+      - Si una subida se corta, se repite la misma orden y sigue donde quedó.
+      - Una reentrega nunca deja al servidor sin la pieza y no se puede subir dos veces.
+      - "Exportar e imprimir" muestra el plan de impresión y pide confirmación antes de imprimir.)
+(0.5: nunca se queda esperando callada: si Tekla no contesta o tiene un cartel abierto, avisa y frena.
+      Las macros se instalan donde las busca la Tekla de cada PC.)
+(0.4: la obra se puede escribir a mano y la app propone sola la del modelo abierto en Tekla)
+
+CÓMO SE USA
+1. Doble clic en "App Ferma.exe" (conviene crear un acceso directo en el escritorio:
+   clic derecho > Enviar a > Escritorio).
+2. Elegí la obra, escribí las fases (104 · 104-108 · 104, 106) y apretá lo que quieras hacer:
+   - Exportar desde Tekla  (con el modelo abierto y la revisión puesta en los planos)
+   - Imprimir para el checker
+   - Subir al servidor     (solo fases APROBADAS)
+3. Siempre te muestra el plan y te pide confirmación antes de hacer algo.
+4. Mientras exporta, no toques Tekla (ni selecciones nada): los reportes salen de lo seleccionado.
+
+LA PRIMERA VEZ
+- La app te pide tu clave de la planilla (un archivo .json que te pasa MB por privado).
+- Si las macros de Tekla faltan, la app te ofrece instalarlas.
+- Para revisar que todo esté bien: abrí una ventana de comandos y escribí
+      "<esta carpeta>\App Ferma.exe" --autoprueba
+  (o pedile a MB que lo haga). Abre un informe con OK / FALLA.
+
+SI ALGO FRENA
+Si dice "fijate si hay un cartel abierto en Tekla": buscalo (puede estar detrás de otras ventanas),
+sacale una captura, cerralo y volvé a apretar Exportar.
+Si una subida se cortó (red, Drive, archivo abierto): repetí la misma subida; sigue donde quedó.
+Leé el motivo en la columna "Qué pasó". Si no se entiende, abrí "Ver detalle técnico"
+y mandale una captura a MB. No subas nada a mano encima de lo que hizo la app.
+
+No modifiques ni borres archivos de esta carpeta.

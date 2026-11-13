@@ -1,0 +1,19 @@
+{
+  "_nota": "Plantillas de reportes que se sacan en cada fase. 'defecto' vale para toda obra; 'obras' pisa la lista para una obra puntual. Se puede editar a mano. Un reporte que sale vacío no va (ni Excel, ni impresión, ni servidor).",
+  "defecto": [
+    "FMA_LISTADO_CONJUNTOS_TOTALES_MFD.csv",
+    "FMA_REPORTE_DE_SUBMATERIALES_NSM(1).csv",
+    "FMA_REPORTE_BULONES_COMPLETOS_OBRA_NSM_REV1.csv",
+    "FMA_REPORTE_BULONES_COMPLETOS_TALLER_NSM_REV1.csv",
+    "FMA_REPORTE_TUERCASYARANDELAS_RV1.csv"
+  ],
+  "obras": {
+    "696A": [
+      "FMA_LISTADO_CONJUNTOS_TOTALES_MFD.csv",
+      "FMA_REPORTE_DE_SUBMATERIALES_NSM(2).csv",
+      "FMA_REPORTE_BULONES_COMPLETOS_OBRA_NSM_REV1.csv",
+      "FMA_REPORTE_BULONES_COMPLETOS_TALLER_NSM_REV1.csv",
+      "FMA_REPORTE_TUERCASYARANDELAS_RV1.csv"
+    ]
+  }
+}
