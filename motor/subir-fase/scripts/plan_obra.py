@@ -25,7 +25,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_fase import PREFIJOS_COMPRADOS, PREFIJOS_SIN_CNC, archivos, dir_entrada, norm  # noqa: E402
+from control_fase import PREFIJOS_COMPRADOS, PREFIJOS_SIN_CNC, archivos, dir_entrada, norm, subcarpeta_fase  # noqa: E402
 
 # Rejas / escalones de reja (<fase>_gr...): se compran hechos, llevan PDF y NO llevan CNC (2026-11-10)
 SIN_CNC = re.compile(r"^\d+_(%s)[A-Z]" % "|".join(PREFIJOS_SIN_CNC))
@@ -49,6 +49,11 @@ def tipo_de(nombre):
     return None
 
 
+def limpiar_nombre(texto):
+    """Categoría apta para nombre de carpeta: sin \\ / : * ? " < > | y sin espacios de más."""
+    return re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|]', "-", texto or "")).strip(" .")
+
+
 def subdirs(p):
     return sorted(d for d in os.listdir(p) if os.path.isdir(os.path.join(p, d))) if os.path.isdir(p) else []
 
@@ -58,7 +63,14 @@ LETRA_RE = re.compile(r"^(\d+[A-Z]+)(?=$|[\s_\-])", re.I)
 
 
 def carpetas_letra(p):
-    return [d for d in subdirs(p) if LETRA_RE.match(d)]
+    """Carpetas de letra de obra. (2026-11-14) No cuentan las que dicen FASE / REPORTE / OBS (en la 695 había una
+    carpeta mal nombrada "695L_REPORTE DE SUBMATERIALES_FASE 40..." que hacía creer que la obra tenía varias letras)."""
+    return [d for d in subdirs(p) if LETRA_RE.match(d) and not re.search(r"FASE|REPORTE|\bOBS\b", d, re.I)]
+
+
+# Carpeta de fase: "FASE 05", "FASE 5 - CAT", "FASE 05_CAT", "FASE 41-COLUMNAS"
+FASE_DIR_RE = re.compile(r"^FASE ?(\d+)(?:\s*[-_]\s*(\S.*))?$", re.I)
+SEP_FASE = " - "        # (2026-11-14) las carpetas nuevas llevan siempre la categoría: "FASE 46 - ESCALERAS"
 
 
 class Convencion:
@@ -85,13 +97,18 @@ class Convencion:
                     fases += subdirs(os.path.join(c, self._unir(base, L)))
         else:
             fases = subdirs(os.path.join(c, "SUBMATERIALES", self.pl_sub)) + subdirs(os.path.join(c, "TIPICOS", self.pl_tip))
-        con_cat = [d for d in fases if re.match(r"^FASE \d+ - ", d)]
-        sin_cat = [d for d in fases if re.match(r"^FASE \d+$", d)]
-        self.estilo_fase = "CAT" if len(con_cat) >= len(sin_cat) and con_cat else "NN"
-        ej = (con_cat or sin_cat or ["FASE 05"])[0]
-        self.pad = 2 if re.match(r"^FASE 0\d", ej) or not (con_cat or sin_cat) else 0
+        # (2026-11-14, pedido del usuario) Las carpetas de fase nuevas llevan SIEMPRE la categoría ("FASE 46 - CAT").
+        # De la obra solo se copia si el número va con cero adelante (FASE 05) o no (FASE 5).
+        nums = [m.group(1) for m in (FASE_DIR_RE.match(d) for d in fases) if m]
+        self.estilo_fase = "CAT"
+        con_cero = sum(1 for x in nums if len(x) > 1 and x.startswith("0"))
+        sin_cero = sum(1 for x in nums if len(x) == 1)
+        self.pad = 2 if con_cero >= sin_cero else 0
+        # Reportes sueltos (695, 702) o en subcarpeta por fase (674): manda lo que más hay en la obra.
         rep = os.path.join(c, self.ruta(("SUBMATERIALES", "REPORTES"), _nueva=False))
-        self.rep_por_fase = any(re.match(r"^FASE ", d) for d in subdirs(rep)) or not archivos(rep)
+        sueltos = [x for x in archivos(rep) if re.search(r"FASE ?\d+", x, re.I) and x.lower().endswith((".xls", ".xlsx", ".xlsm", ".csv"))]
+        por_fase = [d for d in subdirs(rep) if FASE_DIR_RE.match(d)]
+        self.rep_por_fase = len(por_fase) > len(sueltos) or not (sueltos or por_fase)
         # patrones de nombre de reportes: se copia el "tipo" tal como lo escribe la obra
         self.texto_tipo, self.ext_rep = {}, None
         carpetas = [rep, os.path.join(c, self.ruta(("TIPICOS", "REPORTES"), _nueva=False)),
@@ -165,7 +182,8 @@ class Convencion:
 
     def fase_dir(self, n, cat):
         num = f"{n:0{self.pad}d}" if self.pad else str(n)
-        return f"FASE {num} - {cat}" if self.estilo_fase == "CAT" else f"FASE {num}"
+        cat = limpiar_nombre(cat)
+        return f"FASE {num}{SEP_FASE}{cat}" if cat else f"FASE {num}"
 
     def nombre_rep(self, tipo, n, cat, ext_origen):
         estandar = next(t[2] for t in TIPOS if t[0] == tipo)
@@ -211,6 +229,11 @@ def armar(obra, n, fd, c, categoria=None, pestana=None, libro="real"):
     de_esta_fase = re.compile(r"^0*%d_" % n)
     fdir = conv.fase_dir(n, cat)
 
+    def fd_en(base):
+        """Carpeta de la fase dentro de base: la que ya exista (con cualquier nombre) o la nueva con categoría."""
+        ya = subcarpeta_fase(os.path.join(c, conv.ruta(base, _nueva=False)), n)
+        return os.path.basename(ya) if ya else fdir
+
     def base(x):
         return re.sub(r"_\d+$", "", os.path.splitext(x)[0])
 
@@ -238,12 +261,12 @@ def armar(obra, n, fd, c, categoria=None, pestana=None, libro="real"):
     if rejas:
         avisos.append("Rejas / escalones de reja (se compran hechos): van con PDF y sin CNC: " + ", ".join(rejas))
     for b, x in sorted(pdfs.items()):
-        plan.append((os.path.join(d_sub, x), conv.ruta(("SUBMATERIALES", conv.pl_sub), fdir, x)))
+        plan.append((os.path.join(d_sub, x), conv.ruta(("SUBMATERIALES", conv.pl_sub), fd_en(("SUBMATERIALES", conv.pl_sub)), x)))
     for b, x in sorted(cncs.items()):
-        plan.append((os.path.join(d_cnc, x), conv.ruta(("SUBMATERIALES", "CNC"), fdir, x)))
+        plan.append((os.path.join(d_cnc, x), conv.ruta(("SUBMATERIALES", "CNC"), fd_en(("SUBMATERIALES", "CNC")), x)))
     tips = archivos(d_tip)
     for x in tips:
-        plan.append((os.path.join(d_tip, x), conv.ruta(("TIPICOS", conv.pl_tip), fdir, x)))
+        plan.append((os.path.join(d_tip, x), conv.ruta(("TIPICOS", conv.pl_tip), fd_en(("TIPICOS", conv.pl_tip)), x)))
     # reportes
     vistos = {}
     for x in archivos(fd):
@@ -281,7 +304,7 @@ def armar(obra, n, fd, c, categoria=None, pestana=None, libro="real"):
     elif len(bswx) > 1:
         errores.append(f"Hay más de un Strumis: {', '.join(bswx)}")
     else:
-        car_str = conv.ruta(("STRUMIS",), fdir)
+        car_str = conv.ruta(("STRUMIS",), fd_en(("STRUMIS",)))
         ents = [int(m.group(1)) for m in (re.search(r"ENT ?(\d+)", x, re.I) for x in archivos(os.path.join(c, car_str), ".bswx")) if m]
         plan.append((os.path.join(fd, bswx[0]), os.path.join(car_str, conv.nombre_strumis(n, max(ents, default=0) + 1))))
 

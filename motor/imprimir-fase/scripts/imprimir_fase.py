@@ -97,10 +97,15 @@ def trabajador(modo, trabajos):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
         json.dump(trabajos, f, ensure_ascii=False)
         entrada = f.name
+    # (2026-11-14) Tiempo máximo (un cartel del driver no deja la App esperando para siempre) y sin consola negra.
+    paginas = sum(len(t.get("paginas", [])) or 1 for t in trabajos)
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                             os.path.join(AQUI, "imprimir.ps1"), "-modo", modo, "-entrada", entrada],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=300 + 60 * paginas, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        sys.exit(f"FRENA: imprimir.ps1 ({modo}) no terminó a tiempo. Fijate si la impresora o Excel tienen un cartel abierto.")
     finally:
         os.remove(entrada)
     salida = r.stdout.strip().splitlines()
@@ -168,6 +173,8 @@ def main():
     ap.add_argument("--forzar", action="store_true", help="reimprimir también lo ya impreso igual")
     ap.add_argument("--prueba", metavar="CARPETA", help="imprimir a PDF en esa carpeta (sin papel ni registro)")
     a = ap.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")   # (2026-11-14) sin esto se cae al escribir "→" fuera de la consola
     obra = a.obra.upper()
     if not a.base:
         # La misma búsqueda que exportar-fase (otra letra de unidad, otro nombre del Drive, ~\.ferma\exportar.json)
@@ -199,8 +206,13 @@ def main():
                 print(f"FRENA: no se pudo leer {t['archivo']}: {t.get('error')}")
                 return 1
             if not t.get("hoja"):
-                print(f"FRENA: {t['archivo']}: hoja de Excel no reconocida (código {t.get('papel')})")
-                return 1
+                if t.get("papel") in (0, None):
+                    # (2026-11-14) Excel sin tamaño de hoja definido (pasa si se volvió a guardar a mano): va en A4
+                    print(f"AVISO: {os.path.basename(t['archivo'])} no tiene tamaño de hoja: se imprime en A4.")
+                    t["hoja"] = "A4"
+                else:
+                    print(f"FRENA: {t['archivo']}: hoja de Excel no reconocida (código {t.get('papel')})")
+                    return 1
             pdf_de[t["archivo"]] = t["pdf"]
             hoja_excel[t["archivo"]] = (t["hoja"], bool(t["horizontal"]))
 

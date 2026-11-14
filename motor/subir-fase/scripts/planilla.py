@@ -43,7 +43,26 @@ def cargar_config():
         return json.load(f)
 
 
+_CACHE = {}          # (2026-11-14) lecturas de la misma pestaña en la misma corrida (varias fases): una sola consulta
+CACHE_SEG = 120
+
+
 def llamar(pedido):
+    import time
+    clave = (CONFIG, pedido.get("pestana"))
+    if pedido.get("accion") == "leer":
+        ya = _CACHE.get(clave)
+        if ya and time.time() - ya[0] < CACHE_SEG:
+            return ya[1]
+    else:
+        _CACHE.clear()       # cualquier escritura invalida lo leído
+    res = _llamar(pedido)
+    if pedido.get("accion") == "leer":
+        _CACHE[clave] = (time.time(), res)
+    return res
+
+
+def _llamar(pedido):
     c = cargar_config()
     pedido = dict(pedido, token=c["token"])
     req = urllib.request.Request(c["url"], data=json.dumps(pedido).encode("utf-8"),

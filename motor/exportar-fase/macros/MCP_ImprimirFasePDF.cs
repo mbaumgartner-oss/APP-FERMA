@@ -1,14 +1,19 @@
 ﻿using System; using System.Collections; using System.Collections.Generic; using System.IO;
-using Tekla.Structures.Model; using Tekla.Structures.Drawing;
+using Tekla.Structures; using Tekla.Structures.Model; using Tekla.Structures.Drawing;
+using Part = Tekla.Structures.Model.Part; using Assembly = Tekla.Structures.Model.Assembly;
+using Phase = Tekla.Structures.Model.Phase; using ModelObject = Tekla.Structures.Model.ModelObject;
+using ModelObjectEnumerator = Tekla.Structures.Model.ModelObjectEnumerator;
 
-// Imprime a PDF los planos de una fase (Skill exportar-fase, Ferma), con el motor PDF propio de Tekla (sin impresora).
-//   SUB = dibujos de PARTE cuya pieza está en la fase          -> DESTINO_SUB\<marca>.pdf
-//   TIP = dibujos de CONJUNTO cuya pieza principal está en la fase -> DESTINO_TIP\<marca>.pdf
-// Se buscan por la FASE de la pieza, no por la marca (las marcas de típicos no llevan la fase).
-// No modifica el modelo ni los planos. Nunca pisa un PDF que ya exista.
+// Imprime a PDF los planos de las fases pedidas (Skill exportar-fase, Ferma), con el motor PDF propio de Tekla.
+// (2026-11-14) Por TÍPICOS:
+//   TIP = dibujos de CONJUNTO cuya pieza principal está en la fase          -> DESTINO_TIP_<fase>\<marca>.pdf
+//   SUB = dibujos de PARTE de las piezas de esos conjuntos (partes_fase_<n>.txt, aunque la pieza tenga otra fase)
+//         -> DESTINO_SUB_<fase>\<marca>.pdf
+// Varias fases en una sola pasada por los dibujos. No modifica el modelo ni los planos. Nunca pisa un PDF que ya exista.
 // Parámetros en %USERPROFILE%\TeklaMCP_logs\export_params.txt:
-//   MODELO=..., FASE=..., DESTINO_SUB=..., DESTINO_TIP=..., [SOLO=SUB|TIP], [PRUEBA=<marca>] (imprime solo esa)
-// Log: %USERPROFILE%\TeklaMCP_logs\imprimir_pdf_log.txt
+//   MODELO, CREADO, FASES=46,47 (o FASE), DESTINO_SUB_<f>/DESTINO_TIP_<f> (o DESTINO_SUB/DESTINO_TIP con una fase),
+//   [SOLO=SUB|TIP], [PRUEBA=<marca>]
+// Log: imprimir_pdf_log_<fase>.txt por fase y imprimir_pdf_log.txt (resumen).
 
 //Keep: Tekla.Technology.Akit.UserScript
 namespace Tekla.Technology.Akit.UserScript
@@ -17,10 +22,13 @@ namespace Tekla.Technology.Akit.UserScript
     {
         static readonly string DIR_LOG = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "TeklaMCP_logs");
 
+        class Destino { public string Sub, Tip; public List<string> Log = new List<string>(); public int nSub, nTip, nErr, nExiste, nDesact; public HashSet<int> Partes; }
+
         public static void Run(IScript akit)
         {
             var log = new List<string>();
             log.Add("INICIO=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            var dest = new Dictionary<int, Destino>();
             try
             {
                 Dictionary<string, string> p = LeerParametros(Path.Combine(DIR_LOG, "export_params.txt"));
@@ -31,14 +39,30 @@ namespace Tekla.Technology.Akit.UserScript
                 if (!p.ContainsKey("MODELO") || !string.Equals(p["MODELO"].Trim(), nombre, StringComparison.OrdinalIgnoreCase))
                 { log.Add("ERROR: el modelo abierto no es el esperado. No se hace nada."); return; }
                 if (!ParametrosRecientes(p, log)) return;
-                int fase;
-                if (!p.ContainsKey("FASE") || !int.TryParse(p["FASE"].Trim(), out fase)) { log.Add("ERROR: FASE invalida"); return; }
-                string dSub = p.ContainsKey("DESTINO_SUB") ? p["DESTINO_SUB"].Trim() : "";
-                string dTip = p.ContainsKey("DESTINO_TIP") ? p["DESTINO_TIP"].Trim() : "";
+                List<int> fases = Fases(p);
+                if (fases.Count == 0) { log.Add("ERROR: FASES invalida"); return; }
                 string solo = p.ContainsKey("SOLO") ? p["SOLO"].Trim().ToUpper() : "";
                 string prueba = p.ContainsKey("PRUEBA") ? p["PRUEBA"].Trim() : "";
-                if (!Directory.Exists(dSub) || !Directory.Exists(dTip)) { log.Add("ERROR: no existe DESTINO_SUB o DESTINO_TIP"); return; }
-                log.Add("FASE=" + fase); log.Add("DESTINO_SUB=" + dSub); log.Add("DESTINO_TIP=" + dTip);
+                log.Add("FASES=" + string.Join(",", fases.ConvertAll(x => x.ToString()).ToArray()));
+
+                // pieza -> fase (por típicos)
+                var faseDePieza = new Dictionary<int, int>();
+                foreach (int f in fases)
+                {
+                    var d = new Destino();
+                    d.Log.Add("INICIO=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                    d.Log.Add("MODELO=" + nombre);
+                    d.Log.Add("FASE=" + f);
+                    d.Sub = p.ContainsKey("DESTINO_SUB_" + f) ? p["DESTINO_SUB_" + f].Trim() : (fases.Count == 1 && p.ContainsKey("DESTINO_SUB") ? p["DESTINO_SUB"].Trim() : "");
+                    d.Tip = p.ContainsKey("DESTINO_TIP_" + f) ? p["DESTINO_TIP_" + f].Trim() : (fases.Count == 1 && p.ContainsKey("DESTINO_TIP") ? p["DESTINO_TIP"].Trim() : "");
+                    dest[f] = d;
+                    if (!Directory.Exists(d.Sub) || !Directory.Exists(d.Tip)) { d.Log.Add("ERROR: no existe DESTINO_SUB o DESTINO_TIP"); d.Partes = null; continue; }
+                    d.Log.Add("DESTINO_SUB=" + d.Sub); d.Log.Add("DESTINO_TIP=" + d.Tip);
+                    List<int> ids = PartesDeFase(model, p, fases, f, d.Log);
+                    if (ids == null) { d.Partes = null; continue; }
+                    d.Partes = new HashSet<int>(ids);
+                    foreach (int id in ids) faseDePieza[id] = f;
+                }
 
                 DrawingHandler dh = new DrawingHandler();
                 if (!dh.GetConnectionStatus()) { log.Add("ERROR: sin conexion con dibujos"); return; }
@@ -54,49 +78,172 @@ namespace Tekla.Technology.Akit.UserScript
                 attr.OpenFileWhenFinished = false;
                 attr.PrintToMultipleSheet = DotPrintToMultipleSheet.Off;
 
-                int nSub = 0, nTip = 0, nErr = 0, nExiste = 0, nDesact = 0;
                 DrawingEnumerator de = dh.GetDrawings();
                 while (de.MoveNext())
                 {
                     Drawing dw = de.Current;
-                    string tipo = null; Tekla.Structures.Model.ModelObject mo = null;
+                    string tipo = null; int fase = -1;
                     if (dw is SinglePartDrawing)
-                    { tipo = "SUB"; mo = model.SelectModelObject(((SinglePartDrawing)dw).PartIdentifier); }
+                    {
+                        tipo = "SUB";
+                        int id = ((SinglePartDrawing)dw).PartIdentifier.ID;
+                        if (!faseDePieza.TryGetValue(id, out fase)) continue;
+                    }
                     else if (dw is AssemblyDrawing)
                     {
                         tipo = "TIP";
                         Tekla.Structures.Model.Assembly a = model.SelectModelObject(((AssemblyDrawing)dw).AssemblyIdentifier) as Tekla.Structures.Model.Assembly;
-                        if (a != null) mo = a.GetMainPart();
+                        Tekla.Structures.Model.ModelObject mo = a != null ? a.GetMainPart() : null;
+                        Tekla.Structures.Model.Phase ph;
+                        if (mo == null || !mo.GetPhase(out ph)) continue;
+                        fase = ph.PhaseNumber;
                     }
-                    if (tipo == null || mo == null) continue;
+                    if (tipo == null || !dest.ContainsKey(fase) || dest[fase].Partes == null) continue;
                     if (solo != "" && solo != tipo) continue;
-                    Tekla.Structures.Model.Phase ph;
-                    if (!mo.GetPhase(out ph) || ph.PhaseNumber != fase) continue;
+                    Destino d = dest[fase];
                     string marca = dw.Mark.Trim().TrimStart('[').TrimEnd(']').Trim();
                     if (prueba != "" && !string.Equals(prueba, marca, StringComparison.OrdinalIgnoreCase)) continue;
-                    string destino = Path.Combine(tipo == "SUB" ? dSub : dTip, marca + ".pdf");
+                    string destino = Path.Combine(tipo == "SUB" ? d.Sub : d.Tip, marca + ".pdf");
                     string estado = dw.UpToDateStatus.ToString();
-                    if (File.Exists(destino)) { nExiste++; log.Add("  YA EXISTE (no se pisa) " + tipo + " " + marca); continue; }
+                    if (File.Exists(destino)) { d.nExiste++; d.Log.Add("  YA EXISTE (no se pisa) " + tipo + " " + marca); continue; }
                     bool ok = dh.PrintDrawing(dw, attr, destino);
                     bool hay = File.Exists(destino);
-                    if (ok && hay) { if (tipo == "SUB") nSub++; else nTip++; }
-                    else nErr++;
-                    if (estado != "DrawingIsUpToDate") nDesact++;
-                    log.Add("  " + (ok && hay ? "OK  " : "ERR ") + tipo + " " + marca + "  estado=" + estado + "  print=" + ok + " archivo=" + hay);
+                    if (ok && hay) { if (tipo == "SUB") d.nSub++; else d.nTip++; }
+                    else d.nErr++;
+                    if (estado != "DrawingIsUpToDate") d.nDesact++;
+                    d.Log.Add("  " + (ok && hay ? "OK  " : "ERR ") + tipo + " " + marca + "  estado=" + estado + "  print=" + ok + " archivo=" + hay);
                 }
-                log.Add("SUB_IMPRESOS=" + nSub);
-                log.Add("TIP_IMPRESOS=" + nTip);
-                log.Add("ERRORES=" + nErr);
-                log.Add("YA_EXISTIAN=" + nExiste);
-                log.Add("NO_ACTUALIZADOS=" + nDesact);
+                foreach (var kv in dest)
+                {
+                    Destino d = kv.Value;
+                    if (d.Partes == null) continue;
+                    d.Log.Add("SUB_IMPRESOS=" + d.nSub);
+                    d.Log.Add("TIP_IMPRESOS=" + d.nTip);
+                    d.Log.Add("ERRORES=" + d.nErr);
+                    d.Log.Add("YA_EXISTIAN=" + d.nExiste);
+                    d.Log.Add("NO_ACTUALIZADOS=" + d.nDesact);
+                    d.Log.Add("FIN=OK");
+                    log.Add("FASE " + kv.Key + ": SUB " + d.nSub + " · TIP " + d.nTip + " · errores " + d.nErr);
+                }
                 log.Add("FIN=OK");
             }
             catch (Exception ex) { log.Add("EXCEPCION: " + ex.Message + " " + ex.StackTrace); }
             finally
             {
                 Directory.CreateDirectory(DIR_LOG);
+                foreach (var kv in dest)
+                    File.WriteAllLines(Path.Combine(DIR_LOG, "imprimir_pdf_log_" + kv.Key + ".txt"), kv.Value.Log.ToArray());
                 File.WriteAllLines(Path.Combine(DIR_LOG, "imprimir_pdf_log.txt"), log.ToArray());
             }
+        }
+
+        // ---------------------------------------------------------------- piezas de la fase por TÍPICOS (igual en las 3 macros)
+        // Devuelve los IDs de las piezas de los conjuntos (de primer nivel) cuya pieza principal está en la fase.
+        // Usa partes_fase_<n>.txt si es de esta misma exportación (mismo CREADO); si no, calcula TODAS las fases de FASES.
+        static List<int> PartesDeFase(Model model, Dictionary<string, string> p, List<int> fases, int fase, List<string> log)
+        {
+            string creado = p["CREADO"].Trim();
+            List<int> ya = LeerIds(fase, creado);
+            if (ya != null) { log.Add("PIEZAS=desde partes_fase_" + fase + ".txt"); return ya; }
+
+            var subs = new HashSet<int>();
+            var conjuntos = new List<KeyValuePair<int, Assembly>>();   // (fase de la pieza principal, conjunto)
+            ModelObjectEnumerator en = model.GetModelObjectSelector().GetAllObjectsWithType(ModelObject.ModelObjectEnum.ASSEMBLY);
+            while (en.MoveNext())
+            {
+                Assembly a = en.Current as Assembly;
+                if (a == null) continue;
+                foreach (object s in a.GetSubAssemblies()) { Assembly sa = s as Assembly; if (sa != null) subs.Add(sa.Identifier.ID); }
+                Part main = a.GetMainPart() as Part;
+                Phase ph;
+                int fm = (main != null && main.GetPhase(out ph)) ? ph.PhaseNumber : -1;
+                conjuntos.Add(new KeyValuePair<int, Assembly>(fm, a));
+            }
+            var porFase = new Dictionary<int, List<int>>();
+            var otraFase = new Dictionary<int, List<string>>();    // pieza de un típico de la fase con otra fase
+            var enTipicos = new HashSet<int>();
+            foreach (int f in fases) { porFase[f] = new List<int>(); otraFase[f] = new List<string>(); }
+            foreach (var kv in conjuntos)
+            {
+                Assembly a = kv.Value;
+                if (subs.Contains(a.Identifier.ID) || !porFase.ContainsKey(kv.Key)) continue;   // sub-conjunto u otra fase
+                var partes = new List<Part>();
+                Juntar(a, partes, 0);
+                foreach (Part pa in partes)
+                {
+                    if (enTipicos.Contains(pa.Identifier.ID)) continue;
+                    enTipicos.Add(pa.Identifier.ID);
+                    porFase[kv.Key].Add(pa.Identifier.ID);
+                    Phase ph;
+                    if (pa.GetPhase(out ph) && ph.PhaseNumber != kv.Key) otraFase[kv.Key].Add(Marca(pa) + " (fase " + ph.PhaseNumber + ")");
+                }
+            }
+            // piezas con la fase puesta pero de un típico de OTRA fase: no van (solo se informan)
+            var fuera = new Dictionary<int, List<string>>();
+            foreach (int f in fases) fuera[f] = new List<string>();
+            en = model.GetModelObjectSelector().GetAllObjects();
+            Fuera(en, fuera, enTipicos);
+            foreach (int f in fases)
+                EscribirIds(f, creado, porFase[f], otraFase[f], fuera[f]);
+            log.Add("PIEZAS=calculadas por tipicos para las fases " + string.Join(",", fases.ConvertAll(x => x.ToString()).ToArray()));
+            return porFase[fase];
+        }
+
+        static void Fuera(ModelObjectEnumerator en, Dictionary<int, List<string>> fuera, HashSet<int> enTipicos)
+        {
+            while (en.MoveNext())
+            {
+                Part pa = en.Current as Part;
+                if (pa == null || enTipicos.Contains(pa.Identifier.ID)) continue;
+                Phase ph;
+                if (!pa.GetPhase(out ph) || !fuera.ContainsKey(ph.PhaseNumber)) continue;
+                string m = Marca(pa);
+                if (!fuera[ph.PhaseNumber].Contains(m)) fuera[ph.PhaseNumber].Add(m);
+            }
+        }
+
+        static void Juntar(Assembly a, List<Part> partes, int nivel)
+        {
+            if (nivel > 10) return;
+            Part main = a.GetMainPart() as Part;
+            if (main != null) partes.Add(main);
+            foreach (object o in a.GetSecondaries()) { Part pa = o as Part; if (pa != null) partes.Add(pa); }
+            foreach (object s in a.GetSubAssemblies()) { Assembly sa = s as Assembly; if (sa != null) Juntar(sa, partes, nivel + 1); }
+        }
+
+        static string Marca(Part pa) { string m = ""; pa.GetReportProperty("PART_POS", ref m); return m; }
+
+        static string ArchivoIds(int fase) { return Path.Combine(DIR_LOG, "partes_fase_" + fase + ".txt"); }
+
+        static List<int> LeerIds(int fase, string creado)
+        {
+            string ruta = ArchivoIds(fase);
+            if (!File.Exists(ruta)) return null;
+            string[] l = File.ReadAllLines(ruta);
+            if (l.Length == 0 || l[0].Trim() != "CREADO=" + creado) return null;
+            var ids = new List<int>();
+            foreach (string x in l) { int id; if (x.StartsWith("ID=") && int.TryParse(x.Substring(3), out id)) ids.Add(id); }
+            return ids;
+        }
+
+        static void EscribirIds(int fase, string creado, List<int> ids, List<string> otraFase, List<string> fuera)
+        {
+            var l = new List<string>();
+            l.Add("CREADO=" + creado);
+            l.Add("FASE=" + fase);
+            foreach (string m in otraFase) l.Add("OTRA_FASE=" + m);
+            foreach (string m in fuera) l.Add("FUERA=" + m);
+            foreach (int id in ids) l.Add("ID=" + id);
+            Directory.CreateDirectory(DIR_LOG);
+            File.WriteAllLines(ArchivoIds(fase), l.ToArray());
+        }
+
+        static List<int> Fases(Dictionary<string, string> p)
+        {
+            var r = new List<int>();
+            string t = p.ContainsKey("FASES") ? p["FASES"] : (p.ContainsKey("FASE") ? p["FASE"] : "");
+            foreach (string x in t.Split(',')) { int f; if (int.TryParse(x.Trim(), out f) && !r.Contains(f)) r.Add(f); }
+            return r;
         }
 
         // Los parámetros los escribe "exportar_fase.py preparar --crear" con CREADO=fecha. Si son viejos, no se usan:
@@ -107,7 +254,7 @@ namespace Tekla.Technology.Akit.UserScript
             if (!p.ContainsKey("CREADO") || !DateTime.TryParseExact(p["CREADO"].Trim(), "yyyy-MM-dd HH:mm:ss",
                     System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out c))
             { log.Add("ERROR: export_params.txt sin CREADO. Correr de nuevo 'preparar --crear'. No se hace nada."); return false; }
-            if ((DateTime.Now - c).TotalMinutes > 120)
+            if ((DateTime.Now - c).TotalMinutes > 240)
             { log.Add("ERROR: export_params.txt es viejo (" + p["CREADO"].Trim() + "). Correr de nuevo 'preparar --crear'. No se hace nada."); return false; }
             return true;
         }

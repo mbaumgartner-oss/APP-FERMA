@@ -53,6 +53,9 @@ function AbrirPdf($ruta) {
     Esperar ([Windows.Data.Pdf.PdfDocument]::LoadFromStreamAsync($ras)) ([Windows.Data.Pdf.PdfDocument])
 }
 $DIP_MM = 25.4 / 96
+$script:DPI_MAX = 400
+$script:BN = $true          # blanco y negro puro (1 bit). Se puede apagar con FERMA_IMPRIMIR_COLOR=1
+if ($env:FERMA_IMPRIMIR_COLOR -eq '1') { $script:BN = $false; $script:DPI_MAX = 600 }
 
 if ($modo -eq 'info') {
     $res = @()
@@ -81,8 +84,43 @@ function Renderizar($pagina, [double]$dpi) {
     $net = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($st.GetInputStreamAt(0))
     $ms = New-Object IO.MemoryStream; $net.CopyTo($ms); $st.Dispose()
     $ms.Position = 0
-    [System.Drawing.Image]::FromStream($ms)
+    $img = [System.Drawing.Bitmap]::FromStream($ms)
+    if (-not $script:BN) { return $img }
+    # (2026-11-14) Blanco y negro puro (1 bit): la hoja viaja ~25 veces más liviana que en color y la impresora la
+    # procesa mucho más rápido. Lo que no es casi blanco queda negro, así las líneas finas y grises no se pierden.
+    $bn = Convertir1Bit $img
+    $img.Dispose(); $ms.Dispose()
+    return $bn
 }
+
+Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+using System; using System.Drawing; using System.Drawing.Imaging; using System.Runtime.InteropServices;
+public static class Bn1 {
+    // Bitmap -> 1 bit por pixel. Umbral alto (casi blanco = blanco, el resto negro): no se pierden líneas grises finas.
+    public static Bitmap Convertir(Bitmap src, int umbral) {
+        int w = src.Width, h = src.Height;
+        Bitmap c32 = src.PixelFormat == PixelFormat.Format32bppArgb ? src : src.Clone(new Rectangle(0, 0, w, h), PixelFormat.Format32bppArgb);
+        Bitmap dst = new Bitmap(w, h, PixelFormat.Format1bppIndexed);
+        dst.SetResolution(src.HorizontalResolution, src.VerticalResolution);
+        BitmapData a = c32.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        BitmapData b = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format1bppIndexed);
+        byte[] fila = new byte[a.Stride]; byte[] sal = new byte[b.Stride];
+        for (int y = 0; y < h; y++) {
+            Marshal.Copy(new IntPtr(a.Scan0.ToInt64() + (long)y * a.Stride), fila, 0, a.Stride);
+            Array.Clear(sal, 0, sal.Length);
+            for (int x = 0; x < w; x++) {
+                int i = x * 4; int lum = (fila[i] * 114 + fila[i + 1] * 587 + fila[i + 2] * 299) / 1000;
+                if (lum >= umbral) sal[x >> 3] |= (byte)(0x80 >> (x & 7));   // bit en 1 = blanco (paleta 0 negro, 1 blanco)
+            }
+            Marshal.Copy(sal, 0, new IntPtr(b.Scan0.ToInt64() + (long)y * b.Stride), b.Stride);
+        }
+        c32.UnlockBits(a); dst.UnlockBits(b);
+        if (!object.ReferenceEquals(c32, src)) c32.Dispose();
+        return dst;
+    }
+}
+'@
+function Convertir1Bit($img) { [Bn1]::Convertir($img, 230) }
 
 # modo imprimir: cada trabajo es UN solo envío a la impresora con muchas páginas (de varios PDF).
 # Mandar de a un archivo es muchísimo más lento en la impresora (usuario, 2026-11-09): se agrupa por impresora y hoja.
@@ -118,7 +156,9 @@ foreach ($t in $trabajos) {
             $q = $estado.t.paginas[$estado.i]
             $pag = $estado.docs[$q.archivo].GetPage([uint32]$q.pagina)
             $mm2 = ($pag.Size.Width * $DIP_MM) * ($pag.Size.Height * $DIP_MM)
-            $dpi = [math]::Min(600, [math]::Sqrt(70e6 / ($mm2 / 645.16)))   # tope ~70 Mpx por página
+            # (2026-11-14) 400 dpi máximo (antes 600) y tope de ~40 Mpx por hoja: lo mismo de nítido en papel,
+            # mucho menos para procesar en la PC y en la impresora.
+            $dpi = [math]::Min($script:DPI_MAX, [math]::Sqrt(40e6 / ($mm2 / 645.16)))
             $img = Renderizar $pag $dpi
             $b = $e.PageBounds   # hoja completa, en 1/100 de pulgada
             # Misma hoja -> escala 1:1. Si difiere (PDF de Excel en Carta) se ajusta a la hoja, centrado.

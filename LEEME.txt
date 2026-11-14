@@ -1,5 +1,16 @@
 APP FERMA - Carga de fases (exportar, imprimir y subir)
-Versión 0.6 · 11/11/2026 · La mantiene MB
+Versión 0.7 · 14/11/2026 · La mantiene MB
+(0.7: - Las piezas se toman por TÍPICO: entran todas las piezas de los conjuntos de la fase, aunque la pieza tenga
+        otra fase mal puesta. Las que tienen la fase pero son de conjuntos de otra fase no entran (se avisa).
+      - "Elegir reportes para esta obra" (en Más opciones): se eligen de los reportes de Tekla y se recuerdan por obra.
+        Con reportes elegidos, si falta uno avisa y sigue. "Por defecto" vuelve a la lista general.
+      - Varias fases juntas: el modelo, la planilla y los planos se leen una sola vez; CNC y PDF en una sola corrida.
+      - La carpeta de la fase lleva la categoría: FASE 46 - ESCALERAS.
+      - Todo se arma primero en la PC y al final se copia junto al Drive (más rápido).
+      - En el servidor, las carpetas nuevas llevan la categoría y los reportes van como los tiene la obra.
+      - Imprime en blanco y negro puro: cada envío pesa unas 20 veces menos y la impresora lo procesa más rápido.
+      - Galvanizados (o "-" en M2 - PINTURA): no se carga la pintura en la planilla.
+      - IMPORTANTE: al abrir, la app pide instalar las macros nuevas de Tekla. Aceptá.)
 (0.6: arreglos antes del piloto.
       - Las rejas (_gr, con PDF y sin CNC) ya se pueden subir.
       - Los archivos que crea Windows o el Drive (desktop.ini, ~$...xlsx) no se suben y no dan falsas alarmas.
