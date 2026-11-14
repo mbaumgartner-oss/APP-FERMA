@@ -1,13 +1,16 @@
 ﻿using System; using System.Collections; using System.Collections.Generic; using System.IO;
 using Tekla.Structures; using Tekla.Structures.Model;
+using Tekla.Structures.Filtering; using Tekla.Structures.Filtering.Categories;
 
 // Selecciona en el modelo TODO lo de una fase (Skill exportar-fase, Ferma). No modifica el modelo: solo cambia la selección.
 // (2026-11-14) Por TÍPICOS: entran todas las piezas de los conjuntos cuya pieza principal está en la fase, aunque la
 // pieza tenga otra fase mal puesta. Una pieza con la fase pero de un conjunto de otra fase NO entra (se informa).
-// Los bulones se siguen tomando por su fase.
+// (2026-11-14) Bulones: entran los que tienen la fase Y unen al menos una pieza de un típico de la fase
+// (un bulón con la fase mal puesta en piezas de otro típico no entra; se informa).
+// Rápido: se le pide a Tekla con un filtro solo lo de las fases pedidas (no se recorre todo el modelo).
 // Parámetros en %USERPROFILE%\TeklaMCP_logs\export_params.txt: MODELO, CREADO, FASES=46,47 (o FASE=46).
 // Fase a seleccionar: seleccionar_fase.txt (FASE=n, lo escribe "exportar_fase.py seleccionar"); si no está, la primera.
-// Las piezas de cada fase se guardan en partes_fase_<n>.txt (IDs) para que el CNC y el PDF no las vuelvan a calcular.
+// Las piezas y bulones de cada fase se guardan en partes_fase_<n>.txt (IDs) para que el CNC y el PDF no los recalculen.
 // Log: %USERPROFILE%\TeklaMCP_logs\seleccionar_fase_log.txt
 
 //Keep: Tekla.Technology.Akit.UserScript
@@ -42,16 +45,20 @@ namespace Tekla.Technology.Akit.UserScript
 
                 List<int> ids = PartesDeFase(model, p, fases, fase, log);
                 if (ids == null) return;
+                List<int> bulones = LeerLista(fase, "BULON=");
                 var sel = new ArrayList();
                 foreach (int id in ids)
                 {
                     ModelObject o = model.SelectModelObject(new Identifier(id));
                     if (o != null) sel.Add(o);
                 }
-                int nBulones = 0;
-                AgregarBulones(model.GetModelObjectSelector().GetAllObjects(), fase, sel, ref nBulones);
+                foreach (int id in bulones)
+                {
+                    ModelObject o = model.SelectModelObject(new Identifier(id));
+                    if (o != null) sel.Add(o);
+                }
                 log.Add("PARTES=" + ids.Count);
-                log.Add("GRUPOS_BULONES=" + nBulones);
+                log.Add("GRUPOS_BULONES=" + bulones.Count);
                 if (sel.Count == 0) { log.Add("ERROR: nada en la fase"); return; }
                 new Tekla.Structures.Model.UI.ModelObjectSelector().Select(sel);
                 log.Add("SELECCIONADOS=" + sel.Count);
@@ -65,81 +72,139 @@ namespace Tekla.Technology.Akit.UserScript
             }
         }
 
-        static void AgregarBulones(ModelObjectEnumerator en, int fase, ArrayList sel, ref int n)
-        {
-            while (en.MoveNext())
-            {
-                BoltGroup o = en.Current as BoltGroup;
-                Phase ph;
-                if (o == null || !o.GetPhase(out ph) || ph.PhaseNumber != fase) continue;
-                sel.Add(o);
-                n++;
-            }
-        }
-
         // ---------------------------------------------------------------- piezas de la fase por TÍPICOS (igual en las 3 macros)
         // Devuelve los IDs de las piezas de los conjuntos (de primer nivel) cuya pieza principal está en la fase.
-        // Usa partes_fase_<n>.txt si es de esta misma exportación (mismo CREADO); si no, calcula TODAS las fases de FASES.
+        // Usa partes_fase_<n>.txt si es de esta misma exportación (mismo CREADO); si no, calcula TODAS las fases de FASES
+        // y escribe un archivo por fase con: ID= (piezas), BULON= (bulones que van), OTRA_FASE=, FUERA=, BULON_FUERA= (avisos).
         static List<int> PartesDeFase(Model model, Dictionary<string, string> p, List<int> fases, int fase, List<string> log)
         {
             string creado = p["CREADO"].Trim();
             List<int> ya = LeerIds(fase, creado);
             if (ya != null) { log.Add("PIEZAS=desde partes_fase_" + fase + ".txt"); return ya; }
 
-            var subs = new HashSet<int>();
-            var conjuntos = new List<KeyValuePair<int, Assembly>>();   // (fase de la pieza principal, conjunto)
-            ModelObjectEnumerator en = model.GetModelObjectSelector().GetAllObjectsWithType(ModelObject.ModelObjectEnum.ASSEMBLY);
+            var porFase = new Dictionary<int, List<int>>();
+            var otraFase = new Dictionary<int, List<string>>();
+            var fuera = new Dictionary<int, List<string>>();
+            var bulones = new Dictionary<int, List<int>>();
+            var bulFuera = new Dictionary<int, List<string>>();
+            foreach (int f in fases)
+            {
+                porFase[f] = new List<int>(); otraFase[f] = new List<string>(); fuera[f] = new List<string>();
+                bulones[f] = new List<int>(); bulFuera[f] = new List<string>();
+            }
+            var vistos = new HashSet<int>();          // conjuntos de primer nivel ya revisados
+            var tipicoDe = new Dictionary<int, int>(); // pieza -> fase del típico (solo piezas de típicos de las fases)
+
+            // 1) Conjuntos de las fases: Tekla devuelve las piezas cuyo conjunto tiene esa fase (filtro, sin recorrer todo)
+            bool porFiltro = true;
+            ModelObjectEnumerator en;
+            try { en = model.GetModelObjectSelector().GetObjectsByFilter(Filtro(fases, true)); }
+            catch { en = null; porFiltro = false; }
+            if (en != null) JuntarTipicos(en, fases, vistos, porFase, otraFase, tipicoDe);
+            int total = 0;
+            foreach (int f in fases) total += porFase[f].Count;
+            if (total == 0)
+            {
+                // el filtro no trajo nada (o no anduvo en esta versión): se recorre el modelo entero, como antes
+                porFiltro = false;
+                JuntarTipicos(model.GetModelObjectSelector().GetAllObjectsWithType(ModelObject.ModelObjectEnum.ASSEMBLY),
+                              fases, vistos, porFase, otraFase, tipicoDe);
+            }
+            log.Add("METODO=" + (porFiltro ? "filtro por fase del conjunto" : "recorrido completo del modelo"));
+
+            // 2) Objetos con la fase puesta (filtro): piezas que quedan afuera y bulones
+            try { en = model.GetModelObjectSelector().GetObjectsByFilter(Filtro(fases, false)); }
+            catch { en = model.GetModelObjectSelector().GetAllObjects(); }
             while (en.MoveNext())
             {
-                Assembly a = en.Current as Assembly;
-                if (a == null) continue;
-                foreach (object s in a.GetSubAssemblies()) { Assembly sa = s as Assembly; if (sa != null) subs.Add(sa.Identifier.ID); }
-                Part main = a.GetMainPart() as Part;
+                ModelObject o = en.Current;
                 Phase ph;
-                int fm = (main != null && main.GetPhase(out ph)) ? ph.PhaseNumber : -1;
-                conjuntos.Add(new KeyValuePair<int, Assembly>(fm, a));
-            }
-            var porFase = new Dictionary<int, List<int>>();
-            var otraFase = new Dictionary<int, List<string>>();    // pieza de un típico de la fase con otra fase
-            var enTipicos = new HashSet<int>();
-            foreach (int f in fases) { porFase[f] = new List<int>(); otraFase[f] = new List<string>(); }
-            foreach (var kv in conjuntos)
-            {
-                Assembly a = kv.Value;
-                if (subs.Contains(a.Identifier.ID) || !porFase.ContainsKey(kv.Key)) continue;   // sub-conjunto u otra fase
-                var partes = new List<Part>();
-                Juntar(a, partes, 0);
-                foreach (Part pa in partes)
+                if (o == null || !o.GetPhase(out ph) || !porFase.ContainsKey(ph.PhaseNumber)) continue;
+                int f = ph.PhaseNumber;
+                Part pa = o as Part;
+                if (pa != null)
                 {
-                    if (enTipicos.Contains(pa.Identifier.ID)) continue;
-                    enTipicos.Add(pa.Identifier.ID);
-                    porFase[kv.Key].Add(pa.Identifier.ID);
-                    Phase ph;
-                    if (pa.GetPhase(out ph) && ph.PhaseNumber != kv.Key) otraFase[kv.Key].Add(Marca(pa) + " (fase " + ph.PhaseNumber + ")");
+                    if (!tipicoDe.ContainsKey(pa.Identifier.ID)) { string m = Marca(pa); if (!fuera[f].Contains(m)) fuera[f].Add(m); }
+                    continue;
                 }
+                BoltGroup bg = o as BoltGroup;
+                if (bg == null) continue;
+                bool toca = false;
+                var une = new List<string>();
+                foreach (Part q in PiezasDe(bg))
+                {
+                    int ft;
+                    if (tipicoDe.TryGetValue(q.Identifier.ID, out ft) && ft == f) toca = true;
+                    une.Add(Marca(q));
+                }
+                if (toca) bulones[f].Add(bg.Identifier.ID);
+                else bulFuera[f].Add(string.Join("+", une.ToArray()));
             }
-            // piezas con la fase puesta pero de un típico de OTRA fase: no van (solo se informan)
-            var fuera = new Dictionary<int, List<string>>();
-            foreach (int f in fases) fuera[f] = new List<string>();
-            en = model.GetModelObjectSelector().GetAllObjects();
-            Fuera(en, fuera, enTipicos);
             foreach (int f in fases)
-                EscribirIds(f, creado, porFase[f], otraFase[f], fuera[f]);
+                EscribirIds(f, creado, porFase[f], otraFase[f], fuera[f], bulones[f], bulFuera[f]);
             log.Add("PIEZAS=calculadas por tipicos para las fases " + string.Join(",", fases.ConvertAll(x => x.ToString()).ToArray()));
             return porFase[fase];
         }
 
-        static void Fuera(ModelObjectEnumerator en, Dictionary<int, List<string>> fuera, HashSet<int> enTipicos)
+        static FilterExpression Filtro(List<int> fases, bool porConjunto)
+        {
+            var col = new BinaryFilterExpressionCollection();
+            foreach (int f in fases)
+            {
+                BinaryFilterExpression e = porConjunto
+                    ? new BinaryFilterExpression(new AssemblyFilterExpressions.Phase(), StringOperatorType.IS_EQUAL, new StringConstantFilterExpression(f.ToString()))
+                    : new BinaryFilterExpression(new ObjectFilterExpressions.Phase(), NumericOperatorType.IS_EQUAL, new NumericConstantFilterExpression(f));
+                col.Add(new BinaryFilterExpressionItem(e, BinaryFilterOperatorType.BOOLEAN_OR));
+            }
+            return col;
+        }
+
+        // Recorre piezas (o conjuntos) y junta las piezas de cada conjunto de PRIMER NIVEL cuya pieza principal está en una fase.
+        static void JuntarTipicos(ModelObjectEnumerator en, List<int> fases, HashSet<int> vistos, Dictionary<int, List<int>> porFase,
+                                  Dictionary<int, List<string>> otraFase, Dictionary<int, int> tipicoDe)
         {
             while (en.MoveNext())
             {
-                Part pa = en.Current as Part;
-                if (pa == null || enTipicos.Contains(pa.Identifier.ID)) continue;
+                ModelObject o = en.Current;
+                Assembly a = o as Assembly;
+                if (a == null) { Part pa = o as Part; if (pa != null) a = pa.GetAssembly(); }
+                a = PrimerNivel(a);
+                if (a == null || vistos.Contains(a.Identifier.ID)) continue;
+                vistos.Add(a.Identifier.ID);
+                Part main = a.GetMainPart() as Part;
                 Phase ph;
-                if (!pa.GetPhase(out ph) || !fuera.ContainsKey(ph.PhaseNumber)) continue;
-                string m = Marca(pa);
-                if (!fuera[ph.PhaseNumber].Contains(m)) fuera[ph.PhaseNumber].Add(m);
+                int fm = (main != null && main.GetPhase(out ph)) ? ph.PhaseNumber : -1;
+                if (!porFase.ContainsKey(fm)) continue;
+                var partes = new List<Part>();
+                Juntar(a, partes, 0);
+                foreach (Part pa in partes)
+                {
+                    if (tipicoDe.ContainsKey(pa.Identifier.ID)) continue;
+                    tipicoDe[pa.Identifier.ID] = fm;
+                    porFase[fm].Add(pa.Identifier.ID);
+                    if (pa.GetPhase(out ph) && ph.PhaseNumber != fm) otraFase[fm].Add(Marca(pa) + " (fase " + ph.PhaseNumber + ")");
+                }
             }
+        }
+
+        static Assembly PrimerNivel(Assembly a)
+        {
+            for (int i = 0; a != null && i < 10; i++)
+            {
+                Assembly padre = a.GetAssembly() as Assembly;
+                if (padre == null || padre.Identifier.ID == 0 || padre.Identifier.ID == a.Identifier.ID) break;
+                a = padre;
+            }
+            return a;
+        }
+
+        static List<Part> PiezasDe(BoltGroup bg)
+        {
+            var r = new List<Part>();
+            if (bg.PartToBeBolted != null) r.Add(bg.PartToBeBolted);
+            if (bg.PartToBoltTo != null) r.Add(bg.PartToBoltTo);
+            foreach (object o in bg.GetOtherPartsToBolt()) { Part q = o as Part; if (q != null) r.Add(q); }
+            return r;
         }
 
         static void Juntar(Assembly a, List<Part> partes, int nivel)
@@ -161,19 +226,28 @@ namespace Tekla.Technology.Akit.UserScript
             if (!File.Exists(ruta)) return null;
             string[] l = File.ReadAllLines(ruta);
             if (l.Length == 0 || l[0].Trim() != "CREADO=" + creado) return null;
+            return LeerLista(fase, "ID=");
+        }
+
+        static List<int> LeerLista(int fase, string clave)
+        {
             var ids = new List<int>();
-            foreach (string x in l) { int id; if (x.StartsWith("ID=") && int.TryParse(x.Substring(3), out id)) ids.Add(id); }
+            string ruta = ArchivoIds(fase);
+            if (!File.Exists(ruta)) return ids;
+            foreach (string x in File.ReadAllLines(ruta)) { int id; if (x.StartsWith(clave) && int.TryParse(x.Substring(clave.Length), out id)) ids.Add(id); }
             return ids;
         }
 
-        static void EscribirIds(int fase, string creado, List<int> ids, List<string> otraFase, List<string> fuera)
+        static void EscribirIds(int fase, string creado, List<int> ids, List<string> otraFase, List<string> fuera, List<int> bulones, List<string> bulFuera)
         {
             var l = new List<string>();
             l.Add("CREADO=" + creado);
             l.Add("FASE=" + fase);
             foreach (string m in otraFase) l.Add("OTRA_FASE=" + m);
             foreach (string m in fuera) l.Add("FUERA=" + m);
+            foreach (string m in bulFuera) l.Add("BULON_FUERA=" + m);
             foreach (int id in ids) l.Add("ID=" + id);
+            foreach (int id in bulones) l.Add("BULON=" + id);
             Directory.CreateDirectory(DIR_LOG);
             File.WriteAllLines(ArchivoIds(fase), l.ToArray());
         }

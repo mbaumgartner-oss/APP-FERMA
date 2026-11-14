@@ -39,7 +39,7 @@ IMPRESORAS = {"A4": "RICOH MP 4002sp", "A3": "RICOH MP 4002sp",
               "A2": "HP5E87AB (HP DesignJet T250 24-in)", "A1": "HP5E87AB (HP DesignJet T250 24-in)"}
 IMPRESORA_PRUEBA = "Microsoft Print to PDF"
 HOJAS = {"A4": (210, 297), "A3": (297, 420), "A2": (420, 594), "A1": (594, 841), "A0": (841, 1189)}
-NO_SE_IMPRIMEN = {"CNC", "LISTA CNC COMPLETA", "STRUMIS"}
+NO_SE_IMPRIMEN = {"CNC", "LISTA CNC COMPLETA", "STRUMIS", "OBSOLETOS"}
 CAMPOS = ["fecha", "usuario", "obra", "fase", "reentrega", "archivo", "hoja", "orientacion", "paginas",
           "impresora", "sha256"]
 

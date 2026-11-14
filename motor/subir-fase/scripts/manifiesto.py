@@ -43,7 +43,8 @@ def _huella(ruta):
 
 def _archivos(fase_dir):
     res = {}
-    for raiz, _, nombres in os.walk(fase_dir):
+    for raiz, dirs, nombres in os.walk(fase_dir):
+        dirs[:] = [d for d in dirs if d.upper() != "OBSOLETOS"]   # lo reemplazado no es parte de la fase (2026-11-14)
         for n in nombres:
             if _cuenta(n):
                 p = os.path.join(raiz, n)

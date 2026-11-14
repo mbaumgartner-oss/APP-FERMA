@@ -545,6 +545,8 @@ def piezas_por_tipicos(fase):
                     otra.append(l.split("=", 1)[1].strip())
                 elif l.startswith("FUERA="):
                     fuera.append(l.split("=", 1)[1].strip())
+                elif l.startswith("BULON_FUERA="):
+                    fuera.append("bulón de " + l.split("=", 1)[1].strip())
     return otra, fuera
 
 
@@ -646,7 +648,7 @@ def finalizar(args):
         avisos.append(f"{len(otra_fase)} pieza(s) de típicos de esta fase tienen otra fase en el modelo (van igual): "
                       + ", ".join(otra_fase[:15]) + (" …" if len(otra_fase) > 15 else ""))
     if fuera:
-        avisos.append(f"{len(fuera)} pieza(s) tienen la fase {args.fase} pero son de típicos de otra fase (NO van): "
+        avisos.append(f"{len(fuera)} pieza(s) o bulón(es) tienen la fase {args.fase} pero son de típicos de otra fase (NO van): "
                       + ", ".join(fuera[:15]) + (" …" if len(fuera) > 15 else ""))
     # (3) piezas del reporte de submateriales contra lo exportado
     pzs = {m for m in marcas_reporte(wdir, "SUBMATERIALES") if not COMPRADOS.match(m)}
