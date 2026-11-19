@@ -83,7 +83,13 @@ def main():
             os.environ["FERMA_PLANILLA"] = a.libro
             import planilla  # noqa: E402
             print(f"[planilla en vivo: {a.libro}]")
-            filas, _, _ = planilla.leer_pestana(a.pestana)
+            # (2026-11-19) Con la App abierta, lo leído hace un rato puede estar viejo (el checker acaba de poner
+            # APROBADO). Al ejecutar se lee siempre de nuevo; en la simulación, si la fase no está en APROBADO se
+            # confirma con una lectura nueva antes de frenar. Varias fases seguidas siguen usando una sola lectura.
+            filas, _, _ = planilla.leer_pestana(a.pestana, fresco=a.ejecutar)
+            fp = filas.get(n)
+            if not a.ejecutar and not (fp and len(fp) == 1 and fp[0].estado == ESTADO_PARA_SUBIR):
+                filas, _, _ = planilla.leer_pestana(a.pestana, fresco=True)
         else:
             filas, _, _ = leer_planilla(a.planilla)
         fp = filas.get(n)

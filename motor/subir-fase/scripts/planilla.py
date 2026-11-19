@@ -47,10 +47,11 @@ _CACHE = {}          # (2026-11-14) lecturas de la misma pestaña en la misma co
 CACHE_SEG = 120
 
 
-def llamar(pedido):
+def llamar(pedido, fresco=False):
+    """fresco=True: no usa lo leído antes (2026-11-19: la App queda abierta y el checker pone APROBADO mientras tanto)."""
     import time
     clave = (CONFIG, pedido.get("pestana"))
-    if pedido.get("accion") == "leer":
+    if pedido.get("accion") == "leer" and not fresco:
         ya = _CACHE.get(clave)
         if ya and time.time() - ya[0] < CACHE_SEG:
             return ya[1]
@@ -78,9 +79,10 @@ def _llamar(pedido):
     return res
 
 
-def leer_pestana(pestana):
-    """Devuelve (filas_por_secuencia, estados_validos, repetidas) igual que leer_planilla."""
-    return leer_planilla_filas(llamar({"accion": "leer", "pestana": pestana})["valores"])
+def leer_pestana(pestana, fresco=False):
+    """Devuelve (filas_por_secuencia, estados_validos, repetidas) igual que leer_planilla.
+    fresco=True vuelve a consultar la planilla aunque se haya leído hace menos de CACHE_SEG."""
+    return leer_planilla_filas(llamar({"accion": "leer", "pestana": pestana}, fresco=fresco)["valores"])
 
 
 def nota(pestana, secuencia, texto, quien="Claude (Skill subir-fase)"):
