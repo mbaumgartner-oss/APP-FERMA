@@ -489,6 +489,7 @@ def main():
     md = "\n".join(out) + "\n"
     print(md)
     if a.informe:
+        os.makedirs(os.path.dirname(os.path.abspath(a.informe)), exist_ok=True)   # (2026-11-19)
         with open(a.informe, "w", encoding="utf-8") as fo:
             fo.write(md)
     if marca is not None and not marca.get("ok"):

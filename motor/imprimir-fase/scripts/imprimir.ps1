@@ -74,7 +74,7 @@ if ($modo -eq 'info') {
     Salir $res
 }
 
-function Renderizar($pagina, [double]$dpi) {
+function Renderizar($pagina, [double]$dpi, [bool]$tramar = $false) {
     $op = New-Object Windows.Data.Pdf.PdfPageRenderOptions
     $op.DestinationWidth = [uint32][math]::Round($pagina.Size.Width * $dpi / 96)
     $op.DestinationHeight = [uint32][math]::Round($pagina.Size.Height * $dpi / 96)
@@ -88,7 +88,9 @@ function Renderizar($pagina, [double]$dpi) {
     if (-not $script:BN) { return $img }
     # (2026-11-14) Blanco y negro puro (1 bit): la hoja viaja ~25 veces más liviana que en color y la impresora la
     # procesa mucho más rápido. Lo que no es casi blanco queda negro, así las líneas finas y grises no se pierden.
-    $bn = Convertir1Bit $img
+    # (2026-11-17) Los informes de Excel tienen títulos con fondo gris: con umbral salían negros y el texto no se
+    # veía. En las páginas de Excel los grises se TRAMAN (punteado) y el texto negro queda encima, legible.
+    if ($tramar) { $bn = [Bn1]::Tramar($img, 100, 235) } else { $bn = Convertir1Bit $img }
     $img.Dispose(); $ms.Dispose()
     return $bn
 }
@@ -111,6 +113,39 @@ public static class Bn1 {
             for (int x = 0; x < w; x++) {
                 int i = x * 4; int lum = (fila[i] * 114 + fila[i + 1] * 587 + fila[i + 2] * 299) / 1000;
                 if (lum >= umbral) sal[x >> 3] |= (byte)(0x80 >> (x & 7));   // bit en 1 = blanco (paleta 0 negro, 1 blanco)
+            }
+            Marshal.Copy(sal, 0, new IntPtr(b.Scan0.ToInt64() + (long)y * b.Stride), b.Stride);
+        }
+        c32.UnlockBits(a); dst.UnlockBits(b);
+        if (!object.ReferenceEquals(c32, src)) c32.Dispose();
+        return dst;
+    }
+
+    // Para informes (Excel): lum <= negro -> negro (texto, bordes); lum >= blanco -> blanco; en el medio, trama
+    // ordenada (Bayer 8x8) con la densidad del gris. Un fondo gris queda punteado y el texto negro se lee encima.
+    static readonly int[] BAYER = {
+         0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26, 12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+         3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25, 15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21 };
+    public static Bitmap Tramar(Bitmap src, int negro, int blanco) {
+        int w = src.Width, h = src.Height;
+        Bitmap c32 = src.PixelFormat == PixelFormat.Format32bppArgb ? src : src.Clone(new Rectangle(0, 0, w, h), PixelFormat.Format32bppArgb);
+        Bitmap dst = new Bitmap(w, h, PixelFormat.Format1bppIndexed);
+        dst.SetResolution(src.HorizontalResolution, src.VerticalResolution);
+        BitmapData a = c32.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        BitmapData b = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format1bppIndexed);
+        byte[] fila = new byte[a.Stride]; byte[] sal = new byte[b.Stride];
+        int rango = blanco - negro;
+        for (int y = 0; y < h; y++) {
+            Marshal.Copy(new IntPtr(a.Scan0.ToInt64() + (long)y * a.Stride), fila, 0, a.Stride);
+            Array.Clear(sal, 0, sal.Length);
+            int fb = (y & 7) * 8;
+            for (int x = 0; x < w; x++) {
+                int i = x * 4; int lum = (fila[i] * 114 + fila[i + 1] * 587 + fila[i + 2] * 299) / 1000;
+                bool bl;
+                if (lum >= blanco) bl = true;
+                else if (lum <= negro) bl = false;
+                else bl = (lum - negro) * 64 > BAYER[fb + (x & 7)] * rango;   // más claro = más puntos blancos
+                if (bl) sal[x >> 3] |= (byte)(0x80 >> (x & 7));
             }
             Marshal.Copy(sal, 0, new IntPtr(b.Scan0.ToInt64() + (long)y * b.Stride), b.Stride);
         }
@@ -159,7 +194,7 @@ foreach ($t in $trabajos) {
             # (2026-11-14) 400 dpi máximo (antes 600) y tope de ~40 Mpx por hoja: lo mismo de nítido en papel,
             # mucho menos para procesar en la PC y en la impresora.
             $dpi = [math]::Min($script:DPI_MAX, [math]::Sqrt(40e6 / ($mm2 / 645.16)))
-            $img = Renderizar $pag $dpi
+            $img = Renderizar $pag $dpi ([bool]$q.excel)
             $b = $e.PageBounds   # hoja completa, en 1/100 de pulgada
             # Misma hoja -> escala 1:1. Si difiere (PDF de Excel en Carta) se ajusta a la hoja, centrado.
             $iw = $pag.Size.Width / 0.96; $ih = $pag.Size.Height / 0.96

@@ -199,6 +199,7 @@ def ejecutar_plan(plan, c, pestana=None, secuencia=None, libro="real", ejecutar=
     md = "\n".join(out) + "\n"
     print(md)
     if informe:
+        os.makedirs(os.path.dirname(os.path.abspath(informe)), exist_ok=True)   # (2026-11-19) se cortaba sin la carpeta
         with open(informe, "w", encoding="utf-8") as fo:
             fo.write(md)
     return 5 if (marca is not None and not marca.get("ok")) else 0

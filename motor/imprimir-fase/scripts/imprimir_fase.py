@@ -286,7 +286,8 @@ def main():
     for f in van:
         for i, h in enumerate(f["hojas"]):
             grupos.setdefault((f["impresora"], h["hoja"]), []).append(
-                {"archivo": f["pdf"], "pagina": i, "hoja": h["hoja"], "horizontal": h["horizontal"], "rel": f["rel"]})
+                {"archivo": f["pdf"], "pagina": i, "hoja": h["hoja"], "horizontal": h["horizontal"], "rel": f["rel"],
+                 "excel": f["archivo"] in hoja_excel})   # informes: grises tramados (2026-11-17)
     trabajos = []
     for (imp, hj), pags in sorted(grupos.items(), key=lambda x: list(HOJAS).index(x[0][1])):
         nombre = f"{obra} FASE {a.fase}" + (f" REENTREGA {a.reentrega:02d}" if a.reentrega is not None else "") + f" - {hj} ({len(pags)} hojas)"
