@@ -45,5 +45,8 @@ sacale una captura, cerralo y volvé a apretar Exportar.
 Si una subida se cortó (red, Drive, archivo abierto): repetí la misma subida; sigue donde quedó.
 Leé el motivo en la columna "Qué pasó". Si no se entiende, abrí "Ver detalle técnico"
 y mandale una captura a MB. No subas nada a mano encima de lo que hizo la app.
+Si no sacaste captura: todo lo que muestra la app queda guardado en un archivo por día en
+C:\Users\<tu usuario>\.ferma\registros\ (ej. 2026-11-20.log). Mandale a MB el del día en que pasó.
+(No tiene claves.)
 
 No modifiques ni borres archivos de esta carpeta.
