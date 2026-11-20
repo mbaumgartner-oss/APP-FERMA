@@ -38,6 +38,11 @@ CARPETA_REGISTRO = "_IMPRESIONES"
 IMPRESORAS = {"A4": "RICOH MP 4002sp", "A3": "RICOH MP 4002sp",
               "A2": "HP5E87AB (HP DesignJet T250 24-in)", "A1": "HP5E87AB (HP DesignJet T250 24-in)"}
 IMPRESORA_PRUEBA = "Microsoft Print to PDF"
+# (2026-11-20) En cada PC Windows le pone otro nombre a la misma impresora (ej. "RICOH Aficio MP 4002 [0026734B5DF9]").
+# Si no está el nombre exacto, se busca por modelo. Para un caso raro: %USERPROFILE%\.ferma\impresoras.json
+# con {"RICOH MP 4002sp": "<nombre en esta PC>", ...}.
+MODELO_IMPRESORA = {"RICOH MP 4002sp": r"4002", "HP5E87AB (HP DesignJet T250 24-in)": r"T250"}
+CONFIG_IMPRESORAS = os.path.join(os.path.expanduser("~"), ".ferma", "impresoras.json")
 HOJAS = {"A4": (210, 297), "A3": (297, 420), "A2": (420, 594), "A1": (594, 841), "A0": (841, 1189)}
 NO_SE_IMPRIMEN = {"CNC", "LISTA CNC COMPLETA", "STRUMIS", "OBSOLETOS"}
 CAMPOS = ["fecha", "usuario", "obra", "fase", "reentrega", "archivo", "hoja", "orientacion", "paginas",
@@ -91,6 +96,42 @@ def huella(ruta):
         for b in iter(lambda: f.read(1 << 20), b""):
             h.update(b)
     return h.hexdigest()
+
+
+def impresoras_instaladas():
+    """Nombres de las impresoras de esta PC (None si no se pudieron leer)."""
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Drawing; "
+                            "[System.Drawing.Printing.PrinterSettings]::InstalledPrinters | ForEach-Object { $_ }"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        return None
+    nombres = [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    return nombres or None
+
+
+def resolver_impresora(nombre, instaladas):
+    """Nombre real en esta PC de la impresora `nombre`. Devuelve (real, None) o (None, motivo)."""
+    try:
+        with open(CONFIG_IMPRESORAS, encoding="utf-8") as f:
+            propia = json.load(f).get(nombre)
+    except (OSError, ValueError):
+        propia = None
+    if instaladas is None:
+        return (propia or nombre), None          # no se pudo listar: se intenta igual y frena al imprimir si no está
+    if propia:
+        return (propia, None) if propia in instaladas else (None, f"'{propia}' (de impresoras.json) no está en esta PC")
+    if nombre in instaladas:
+        return nombre, None
+    patron = MODELO_IMPRESORA.get(nombre)
+    cand = [x for x in instaladas if patron and re.search(patron, x, re.I)]
+    if len(cand) == 1:
+        return cand[0], None
+    if not cand:
+        return None, f"no hay ninguna impresora '{nombre}' (ni del mismo modelo) en esta PC"
+    return None, f"hay {len(cand)} impresoras del modelo de '{nombre}': {', '.join(cand)}"
 
 
 def trabajador(modo, trabajos):
@@ -251,6 +292,30 @@ def main():
         for e in errores:
             print("  - " + e)
         return 1
+
+    # (2026-11-20) cada impresora con el nombre que tiene en ESTA PC
+    instaladas = impresoras_instaladas()
+    reales, faltan = {}, []
+    for nombre in sorted({f["impresora"] for f in filas}):
+        real, motivo = resolver_impresora(nombre, instaladas)
+        if real:
+            reales[nombre] = real
+            if real != nombre:
+                print(f"[impresora: '{nombre}' en esta PC se llama '{real}']")
+        elif a.prueba:
+            reales[nombre] = nombre
+            print(f"AVISO: {motivo} (en la prueba no importa: va a PDF).")
+        else:
+            faltan.append(motivo)
+    if faltan:
+        print("FRENA: falta la impresora:")
+        for m in faltan:
+            print("  - " + m)
+        print(f"  Instaladas en esta PC: {', '.join(instaladas or ['(no se pudieron leer)'])}")
+        print("  Agregala en Windows (Configuración > Impresoras y escáneres) o pedile a MB que la configure.")
+        return 1
+    for f in filas:
+        f["impresora"] = reales[f["impresora"]]
 
     # qué se manda
     for f in filas:

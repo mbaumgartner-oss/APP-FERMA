@@ -173,7 +173,22 @@ foreach ($t in $trabajos) {
         if ($t.salida) { $ps.PrintToFile = $true; $ps.PrintFileName = $t.salida }
         $papeles = @{}
         foreach ($pz in $ps.PaperSizes) { if (-not $papeles.ContainsKey($pz.PaperName)) { $papeles[$pz.PaperName] = $pz } }
-        foreach ($h in $t.paginas) { if (-not $papeles.ContainsKey($h.hoja)) { throw "la impresora $($t.impresora) no tiene hoja $($h.hoja)" } }
+        # (2026-11-20) Con otro driver la hoja puede llamarse distinto ("ISO A3", "A3 (297 x 420 mm)"): se busca por medida.
+        $MM = @{ A4 = 210, 297; A3 = 297, 420; A2 = 420, 594; A1 = 594, 841; A0 = 841, 1189 }
+        foreach ($h in $t.paginas) {
+            if ($papeles.ContainsKey($h.hoja)) { continue }
+            $m = $MM[$h.hoja]
+            $hallada = $null
+            if ($m) {
+                $a = $m[0] / 0.254; $b = $m[1] / 0.254     # mm -> 1/100 de pulgada
+                foreach ($pz in $ps.PaperSizes) {
+                    $c = [math]::Min($pz.Width, $pz.Height); $l = [math]::Max($pz.Width, $pz.Height)
+                    if ([math]::Abs($c - $a) -le 8 -and [math]::Abs($l - $b) -le 8) { $hallada = $pz; break }
+                }
+            }
+            if (-not $hallada) { throw "la impresora $($t.impresora) no tiene hoja $($h.hoja)" }
+            $papeles[$h.hoja] = $hallada
+        }
 
         $pd = New-Object System.Drawing.Printing.PrintDocument
         $pd.PrinterSettings = $ps
