@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,9 @@ import time
 AQUI = os.path.dirname(os.path.abspath(__file__))
 BASE_DEFECTO = r"G:\.shortcut-targets-by-id\1p8yAck6fXKpSit08dYenjyFLlO_z5VE9\OBRAS\PASADO A CONTROL"
 CARPETA_REGISTRO = "_IMPRESIONES"
+# (2026-11-20) Se imprime desde esta PC, no desde el Drive: si la fase se exportó en esta PC se usa la copia local que
+# armó exportar-fase (la misma carpeta que DIR_TRABAJO de exportar_fase.py); si no, se baja una vez a una carpeta temporal.
+DIR_TRABAJO_EXPORT = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "Ferma", "exportando")
 IMPRESORAS = {"A4": "RICOH MP 4002sp", "A3": "RICOH MP 4002sp",
               "A2": "HP5E87AB (HP DesignJet T250 24-in)", "A1": "HP5E87AB (HP DesignJet T250 24-in)"}
 IMPRESORA_PRUEBA = "Microsoft Print to PDF"
@@ -88,6 +92,41 @@ def archivos_a_imprimir(fdir, reentrega):
             if n.lower().endswith((".pdf", ".xlsx", ".xls")) and not n.startswith("~$"):
                 res.append(os.path.join(actual, n))
     return raiz, sorted(res)
+
+
+def copias_locales(fdir, obra, arch, tmp):
+    """{archivo del Drive: archivo en esta PC}. Usa la copia de exportar-fase si es la misma (tamaño y fecha iguales);
+    si no, copia el archivo del Drive a tmp (una sola lectura del Drive; después todo se lee de la PC)."""
+    loc_fase = os.path.join(DIR_TRABAJO_EXPORT, obra, os.path.basename(fdir))
+    res, de_pc = {}, 0
+    for x in arch:
+        rel = os.path.relpath(x, fdir)
+        loc = os.path.join(loc_fase, rel)
+        try:
+            sx, sl = os.stat(x), os.stat(loc)
+            if sx.st_size == sl.st_size and abs(sx.st_mtime - sl.st_mtime) < 2:
+                res[x], de_pc = loc, de_pc + 1
+                continue
+        except OSError:
+            pass
+        dst = os.path.join(tmp, "fase", rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(x, dst)
+        res[x] = dst
+    print(f"Se imprime desde esta PC: {de_pc} archivo(s) de la exportación local, {len(arch) - de_pc} copiado(s) del Drive.")
+    return res
+
+
+def limpiar_temporales():
+    """Borra las carpetas temporales propias (imprimir_fase_*) de más de un día."""
+    base = tempfile.gettempdir()
+    for d in os.listdir(base):
+        p = os.path.join(base, d)
+        try:
+            if d.startswith("imprimir_fase_") and os.path.isdir(p) and time.time() - os.path.getmtime(p) > 86400:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def huella(ruta):
@@ -204,6 +243,15 @@ def avisar_manifiesto(fdir):
 
 
 def main():
+    """(2026-11-20) Todo lo que se muestra queda también en ~/.ferma/registros/AAAA-MM-DD.log."""
+    aqui = os.path.dirname(os.path.abspath(__file__))
+    if aqui not in sys.path:
+        sys.path.insert(0, aqui)
+    import registro
+    return registro.con_registro("imprimir " + " ".join(sys.argv[1:3]), _main)
+
+
+def _main():
     ap = argparse.ArgumentParser(description="Imprimir una fase de PASADO A CONTROL para el checker")
     ap.add_argument("--obra", required=True)
     ap.add_argument("--fase", type=int, required=True)
@@ -236,12 +284,15 @@ def main():
     avisar_manifiesto(fdir)
 
     # Excel -> PDF temporal (no se toca el .xlsx), después todo es PDF
+    limpiar_temporales()
     tmp = tempfile.mkdtemp(prefix="imprimir_fase_")
+    local = copias_locales(fdir, obra, arch, tmp)
     xls = [x for x in arch if not x.lower().endswith(".pdf")]
-    pdf_de = {x: x for x in arch if x.lower().endswith(".pdf")}
+    pdf_de = {x: local[x] for x in arch if x.lower().endswith(".pdf")}
+    de_local = {local[x]: x for x in xls}
     hoja_excel = {}   # la hoja de un Excel sale de su configuración de página, no del PDF temporal
     if xls:
-        r = trabajador("xlsx2pdf", [{"archivo": x, "pdf": os.path.join(tmp, "%02d.pdf" % i)} for i, x in enumerate(xls)])
+        r = trabajador("xlsx2pdf", [{"archivo": local[x], "pdf": os.path.join(tmp, "%02d.pdf" % i)} for i, x in enumerate(xls)])
         for t in r:
             if not t.get("ok"):
                 print(f"FRENA: no se pudo leer {t['archivo']}: {t.get('error')}")
@@ -254,8 +305,9 @@ def main():
                 else:
                     print(f"FRENA: {t['archivo']}: hoja de Excel no reconocida (código {t.get('papel')})")
                     return 1
-            pdf_de[t["archivo"]] = t["pdf"]
-            hoja_excel[t["archivo"]] = (t["hoja"], bool(t["horizontal"]))
+            x = de_local[t["archivo"]]
+            pdf_de[x] = t["pdf"]
+            hoja_excel[x] = (t["hoja"], bool(t["horizontal"]))
 
     info = {t["archivo"]: t for t in trabajador("info", [{"archivo": pdf_de[x]} for x in arch])}
     previo = leer_registro(a.base, obra, a.fase)
@@ -282,7 +334,7 @@ def main():
         if "?" in impresoras or len(impresoras) > 1:
             errores.append(f"{rel}: hojas {tamanos} sin una única impresora asignada")
             continue
-        sha = huella(x)
+        sha = huella(local[x])
         ant = previo.get(rel)
         estado = "nuevo" if not ant else ("ya impreso igual" if ant["sha256"] == sha else "CAMBIÓ desde la última impresión")
         filas.append({"rel": rel, "archivo": x, "pdf": pdf_de[x], "hojas": hojas, "tamanos": tamanos,

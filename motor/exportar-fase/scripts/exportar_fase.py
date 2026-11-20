@@ -845,6 +845,15 @@ def cmd_macros(args):
 
 
 def main():
+    """(2026-11-20) Todo lo que se muestra queda también en ~/.ferma/registros/AAAA-MM-DD.log."""
+    aqui = os.path.dirname(os.path.abspath(__file__))
+    if aqui not in sys.path:
+        sys.path.insert(0, aqui)
+    import registro
+    return registro.con_registro("exportar " + " ".join(sys.argv[1:3]), _main)
+
+
+def _main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     for nombre in ("preparar", "seleccionar", "reportes", "traer-reportes", "revisar", "finalizar", "planilla",

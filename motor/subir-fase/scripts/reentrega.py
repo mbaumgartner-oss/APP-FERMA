@@ -166,6 +166,15 @@ def controlar_entrega(f, obra, NN):
 
 
 def main():
+    """(2026-11-20) Todo lo que se muestra queda también en ~/.ferma/registros/AAAA-MM-DD.log."""
+    aqui = os.path.dirname(os.path.abspath(__file__))
+    if aqui not in sys.path:
+        sys.path.insert(0, aqui)
+    import registro
+    return registro.con_registro("reentrega " + " ".join(sys.argv[1:3]), _main)
+
+
+def _main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="Reentrega de una fase ya subida")
