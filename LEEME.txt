@@ -1,5 +1,10 @@
 APP FERMA - Carga de fases (exportar, imprimir y subir)
-Versión 0.7 · 14/11/2026 · La mantiene MB
+Versión 0.8 · 21/11/2026 · La mantiene MB
+(0.8: - Con la app abierta, una fase que el checker acaba de aprobar ya se puede subir (antes había que cerrarla y abrirla).
+      - La impresora se busca por modelo (RICOH 4002 / HP T250), aunque en cada PC tenga otro nombre.
+      - Imprime desde la PC con la copia local de la exportación (más rápido) y no desde el Drive.
+      - Todo lo que muestra la app queda en un registro por día (ver "SI ALGO FRENA").
+      - Informes impresos más legibles.)
 (0.7: - Las piezas se toman por TÍPICO: entran todas las piezas de los conjuntos de la fase, aunque la pieza tenga
         otra fase mal puesta. Las que tienen la fase pero son de conjuntos de otra fase no entran (se avisa).
       - "Elegir reportes para esta obra" (en Más opciones): se eligen de los reportes de Tekla y se recuerdan por obra.
