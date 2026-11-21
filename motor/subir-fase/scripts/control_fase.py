@@ -261,7 +261,9 @@ def controlar(f, filas_planilla, estados_validos, modo):
 
     # --- tipo de fase
     if not f.sub_pdf and not f.cnc:
-        if f.tipicos:
+        if f.tipicos and all(re.match(r"^CFZ", os.path.basename(str(t)), re.I) for t in f.tipicos):
+            add(INFO, "FASE-01", "Correas Z (CFZ): fase solo de típicos, sin submateriales ni CNC (regla 2026-11-21).")
+        elif f.tipicos:
             add(AVISO, "FASE-01", "No hay submateriales ni CNC. ¿Es una fase solo de típicos (correas sin accesorios, plegados)? Confirmar.")
         else:
             add(ERROR, "FASE-02", "No hay submateriales, CNC ni típicos.")

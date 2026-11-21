@@ -1,5 +1,9 @@
 APP FERMA - Carga de fases (exportar, imprimir y subir)
-Versión 0.8 · 21/11/2026 · La mantiene MB
+Versión 0.9 · 21/11/2026 · La mantiene MB
+(0.9: - Fases sin submateriales: si ninguna pieza de los conjuntos tiene plano de submaterial, la app pregunta
+        "¿Esta fase no lleva submateriales?". Con el sí, exporta solo típicos y reportes (sin CNC) y se puede subir.
+      - Correas Z (CFZ): no pregunta, sigue sola.
+      - Para actualizar: cerrá la app y volvé a abrirla desde esta carpeta (debe decir versión 0.9).)
 (0.8: - Con la app abierta, una fase que el checker acaba de aprobar ya se puede subir (antes había que cerrarla y abrirla).
       - La impresora se busca por modelo (RICOH 4002 / HP T250), aunque en cada PC tenga otro nombre.
       - Imprime desde la PC con la copia local de la exportación (más rápido) y no desde el Drive.

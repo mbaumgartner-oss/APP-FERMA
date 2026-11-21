@@ -45,6 +45,11 @@ CONFIG_IMPRESION_BASE = "MFD"          # confirmado por el usuario 2026-11-06
 SUBCARPETAS = ("CNC", "SUB", "TIP")
 COMPRADOS = re.compile(r"^\d+_(nut|washer|tuerca|arandela)", re.I)   # se compran fabricadas: nunca van
 SIN_CNC = re.compile(r"^\d+_gr[A-Z]")   # rejas / escalones de reja: se compran hechos, PDF sí, CNC no (2026-11-10)
+# (2026-11-21) Correas Z (CFZ / cfz): no llevan submateriales ni CNC, solo típicos. Si la fase es toda de correas Z,
+# no se pregunta: se sigue sola. Cualquier otra fase sin planos de submateriales pregunta.
+CORREA_Z_TIP = re.compile(r"^CFZ", re.I)
+CORREA_Z_SUB = re.compile(r"^\d+_cfz", re.I)
+SIN_SUB_MARCA = "_sin_submateriales.txt"   # va en la carpeta temporal de la Skill (staging), nunca al Drive
 BLOQUEO = "_EXPORTANDO.txt"
 PROBE_MAX_MIN = 5          # el log del modelo tiene que ser de recién
 BLOQUEO_MAX_H = 4          # un bloqueo de otra persona más viejo que esto se considera abandonado
@@ -484,6 +489,13 @@ def traer_reportes(args):
             return 1
     tipos = {tipo_csv(os.path.join(wdir, x)) for x in con_archivos(wdir) if x.lower().endswith(".csv")}
     falta_tipo = [t for t in ("CONJUNTOS", "SUBMATERIALES") if t not in tipos]
+    sub_vacio = any(tipo_csv(os.path.join(st, os.path.splitext(t)[0] + e)) == "SUBMATERIALES"
+                    for t in vacios for e in (".csv", ".xsr") if os.path.isfile(os.path.join(st, os.path.splitext(t)[0] + e)))
+    if falta_tipo == ["SUBMATERIALES"] and (sub_vacio or not blando):
+        # (2026-11-21) El reporte de submateriales salió vacío: puede ser una fase solo de típicos (correas Z,
+        # plegados). No frena acá: lo decide "revisar" (sigue solo con correas CFZ; si no, pregunta).
+        print("AVISO: el reporte de submateriales no tiene datos: se revisa si la fase lleva submateriales.")
+        return 0
     if falta_tipo:
         if blando:
             print("AVISO: no hay reporte de " + " ni de ".join(t.lower() for t in falta_tipo)
@@ -502,7 +514,30 @@ def revisar(args):
         datos = json.load(f)
     # (2026-11-14) el JSON puede traer los planos de varias fases juntas (se pide una sola vez): solo cuentan los de esta
     planos = {d["mark"].strip("[] "): d for d in datos.get("drawings", [])}
-    esperados = sorted(marcas_reporte(wdir, "SUBMATERIALES")) + sorted(marcas_reporte(wdir, "CONJUNTOS"))
+    subs = sorted(m for m in marcas_reporte(wdir, "SUBMATERIALES") if not COMPRADOS.match(m))
+    tips = sorted(marcas_reporte(wdir, "CONJUNTOS"))
+    marca_sin = os.path.join(staging(pr["OBRA"], args.fase), SIN_SUB_MARCA)
+    if os.path.isfile(marca_sin):
+        os.remove(marca_sin)       # archivo propio de la Skill: se decide de nuevo en cada revisión
+    # (2026-11-21) Fase sin submateriales: ninguna pieza de los conjuntos tiene plano de submaterial creado (o el
+    # reporte de submateriales salió vacío) y sí hay típicos. Correas Z (CFZ): se sigue sola. Otra: se pregunta.
+    if tips and all(m not in planos for m in subs):
+        cfz = all(CORREA_Z_TIP.match(t) for t in tips) or (subs and all(CORREA_Z_SUB.match(m) for m in subs))
+        if cfz:
+            print(f"Correas Z (CFZ): la fase {args.fase} no lleva submateriales. Se sigue solo con típicos (sin submateriales ni CNC).")
+        elif getattr(args, "sin_submateriales", False):
+            print(f"Fase {args.fase} sin submateriales (confirmado por el modelador): se sigue solo con típicos (sin CNC).")
+        else:
+            print(f"PREGUNTA: la fase {args.fase} no tiene ningún plano de submaterial creado"
+                  + (f" ({len(subs)} pieza(s) en el reporte sin plano)" if subs else " (el reporte de submateriales está vacío)")
+                  + ". ¿Esta fase no lleva submateriales (solo típicos)? Con el sí, repetir con --sin-submateriales.")
+            return 3
+        os.makedirs(os.path.dirname(marca_sin), exist_ok=True)
+        with open(marca_sin, "w", encoding="utf-8") as fo:
+            fo.write(f"FASE={args.fase}\nMOTIVO={'correas Z (CFZ)' if cfz else 'confirmado por el modelador'}\n"
+                     f"PIEZAS_SIN_PLANO={','.join(subs)}\n")
+        subs = []
+    esperados = subs + tips
     problemas = []
     for m in esperados:
         if COMPRADOS.match(m):
@@ -587,6 +622,19 @@ def finalizar(args):
             return 1
     blando = sin_frenar(args, pr["OBRA"])
     errores, avisos = [], []
+    sin_sub = leer_kv(os.path.join(staging(pr["OBRA"], args.fase), SIN_SUB_MARCA))
+    sin_sub = sin_sub if sin_sub.get("FASE") == str(args.fase) else None
+    if sin_sub:
+        # (2026-11-21) Fase solo de típicos: el CNC que haya sacado la macro (de las piezas principales) no va.
+        # Se aparta fuera de la carpeta de trabajo (no se borra) y no se copia al Drive.
+        print(f"Fase sin submateriales ({sin_sub.get('MOTIVO', '?')}): van solo los típicos y los reportes; sin CNC.")
+        d_cnc = os.path.join(wdir, "CNC")
+        if con_archivos(d_cnc):
+            aparte = wdir + " (CNC que no va, sin submateriales " + datetime.now().strftime("%Y-%m-%d %H%M%S") + ")"
+            os.makedirs(aparte, exist_ok=True)
+            shutil.move(d_cnc, os.path.join(aparte, "CNC"))
+            os.makedirs(d_cnc, exist_ok=True)
+            print(f"  El CNC que salió de la macro quedó aparte (no va): {aparte}")
 
     # (4) Lo que dicen las macros: planos sin actualizar, errores de PDF, CNC que no salieron.
     pdf, ruta_pdf = log_fase("imprimir_pdf_log", args.fase)
@@ -598,7 +646,9 @@ def finalizar(args):
         if int(pdf.get("ERRORES", "0") or 0):
             errores.append(f"{pdf['ERRORES']} PDF con error (ver {os.path.basename(ruta_pdf)})")
     cnc, ruta_cnc = log_fase("export_cnc_log", args.fase)
-    if cnc.get("FASE") != str(args.fase) or cnc.get("FIN") != "OK":
+    if sin_sub:
+        pass                       # sin submateriales: el CNC no va, no se controla
+    elif cnc.get("FASE") != str(args.fase) or cnc.get("FIN") != "OK":
         motivo = next((k + v for k, v in cnc.items() if k.startswith(("ERROR", "EXCEPCION"))), "")
         if args.retomar and "ya tiene archivos .nc1" in motivo:
             avisos.append("CNC: ya estaban de la vez anterior (retomar); se controlan contra los PDF.")
@@ -623,6 +673,9 @@ def finalizar(args):
         if x.lower().endswith(".csv"):
             if reporte_vacio(os.path.join(wdir, x)):
                 print(f"vacío: {x} no tiene datos; no va (no se arma su Excel).")
+                continue
+            if sin_sub and tipo_csv(os.path.join(wdir, x)) == "SUBMATERIALES":
+                print(f"sin submateriales: {x} no va (no se arma su Excel).")
                 continue
             _, msg = reportes_excel.generar(os.path.join(wdir, x))
             print("excel: " + msg)
@@ -652,7 +705,11 @@ def finalizar(args):
                       + ", ".join(fuera[:15]) + (" …" if len(fuera) > 15 else ""))
     # (3) piezas del reporte de submateriales contra lo exportado
     pzs = {m for m in marcas_reporte(wdir, "SUBMATERIALES") if not COMPRADOS.match(m)}
-    if pzs:
+    if sin_sub:
+        if sub:
+            errores.append("la fase se marcó sin submateriales pero salieron PDF de submateriales: " + ", ".join(sub[:15]))
+        pzs = set()
+    elif pzs:
         for m in sorted(pzs - set(sub)):
             errores.append(f"{m}: está en el reporte de submateriales pero no tiene PDF")
         for m in sorted(set(sub) - pzs):
@@ -885,6 +942,8 @@ def _main():
             s.add_argument("--retomar", action="store_true", help="la exportación se retomó: CNC ya hechos no son error")
         if nombre == "revisar":
             s.add_argument("--json", required=True, help="respuesta de get_drawings_properties guardada en un archivo")
+            s.add_argument("--sin-submateriales", action="store_true",
+                           help="el modelador confirmó que la fase no lleva submateriales (solo típicos, sin CNC)")
         if nombre == "planilla":
             s.add_argument("--completar", action="store_true", help="carga PESO y M2 del reporte si están vacíos")
             s.add_argument("--reemplazar", action="store_true", help="pisa PESO/M2 aunque la planilla tenga otro valor")

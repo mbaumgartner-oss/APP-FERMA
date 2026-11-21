@@ -150,9 +150,14 @@ def _main():
     except ValueError as e:
         print(e, file=sys.stderr)
         return 2
-    if not any(d.startswith(os.path.join("SUBMATERIALES", "")) for _, d in r["plan"]) and \
-            any(d.startswith(os.path.join("TIPICOS", "")) for _, d in r["plan"]):
-        r["avisos"].append("No hay submateriales ni CNC: ¿es una fase solo de típicos (correas sin accesorios, plegados)?")
+    tips = [os.path.basename(d) for _, d in r["plan"] if d.startswith(os.path.join("TIPICOS", ""))
+            and d.lower().endswith((".pdf", ".dxf"))]
+    if not any(d.startswith(os.path.join("SUBMATERIALES", "")) for _, d in r["plan"]) and tips:
+        if all(re.match(r"^CFZ", t, re.I) for t in tips):
+            # (2026-11-21) Correas Z (CFZ): no llevan submateriales ni CNC. No se pregunta.
+            print("Correas Z (CFZ): fase solo de típicos, sin submateriales ni CNC.")
+        else:
+            r["avisos"].append("No hay submateriales ni CNC: ¿es una fase solo de típicos (correas sin accesorios, plegados)?")
     resumen = plan_obra.texto_plan(r)
     print("\n".join(resumen))
     if r["errores"]:
