@@ -179,7 +179,51 @@ namespace Tekla.Technology.Akit.UserScript
             }
             log.Add("METODO=" + (porFiltro ? "filtro por fase del conjunto" : "recorrido completo del modelo"));
 
-            // 2) Objetos con la fase puesta (filtro): piezas que quedan afuera y bulones
+            // 2) (2026-11-24) BULONES COMO LOS SACA EL EQUIPO (video del usuario): filtro de vista "Conjunto · Fase = N",
+            //    se selecciona todo lo que muestra y se saca el reporte. Entra todo bulón cuyo CONJUNTO es de la fase,
+            //    tenga la fase que tenga el bulón. Reemplaza la regla del 2026-11-14 (fase del bulón + toca un típico).
+            var yaBulon = new HashSet<int>();
+            int bulPorFiltro = 0;
+            foreach (int f in fases)
+            {
+                ModelObjectEnumerator eb = null;
+                try { eb = model.GetModelObjectSelector().GetObjectsByFilter(Filtro(new List<int> { f }, true)); }
+                catch { eb = null; }
+                if (eb == null) continue;
+                while (eb.MoveNext())
+                {
+                    BoltGroup bg = eb.Current as BoltGroup;
+                    if (bg == null || yaBulon.Contains(bg.Identifier.ID)) continue;
+                    yaBulon.Add(bg.Identifier.ID);
+                    bulones[f].Add(bg.Identifier.ID);
+                    bulPorFiltro++;
+                }
+            }
+            if (bulPorFiltro == 0)
+            {
+                // El filtro no devolvió bulones (otra versión de Tekla): se toman los bulones de las piezas de los típicos.
+                // Cada bulón va con el conjunto de la pieza que se abulona (PartToBeBolted), que es su conjunto en Tekla.
+                foreach (int f in fases)
+                    foreach (int id in porFase[f])
+                    {
+                        Part pa = model.SelectModelObject(new Identifier(id)) as Part;
+                        if (pa == null) continue;
+                        ModelObjectEnumerator eb = pa.GetBolts();
+                        while (eb.MoveNext())
+                        {
+                            BoltGroup bg = eb.Current as BoltGroup;
+                            if (bg == null || bg.PartToBeBolted == null || yaBulon.Contains(bg.Identifier.ID)) continue;
+                            int ft;
+                            if (!tipicoDe.TryGetValue(bg.PartToBeBolted.Identifier.ID, out ft)) continue;
+                            yaBulon.Add(bg.Identifier.ID);
+                            bulones[ft].Add(bg.Identifier.ID);
+                        }
+                    }
+            }
+            log.Add("METODO_BULONES=" + (bulPorFiltro > 0 ? "filtro Conjunto Fase (como en la vista)" : "bulones de las piezas de los tipicos"));
+
+            // 3) Objetos con la fase puesta (filtro): piezas que quedan afuera y bulones con la fase que son de un
+            //    conjunto de otra fase (no van; se avisan)
             try { en = model.GetModelObjectSelector().GetObjectsByFilter(Filtro(fases, false)); }
             catch { en = model.GetModelObjectSelector().GetAllObjects(); }
             while (en.MoveNext())
@@ -195,17 +239,10 @@ namespace Tekla.Technology.Akit.UserScript
                     continue;
                 }
                 BoltGroup bg = o as BoltGroup;
-                if (bg == null) continue;
-                bool toca = false;
+                if (bg == null || yaBulon.Contains(bg.Identifier.ID)) continue;
                 var une = new List<string>();
-                foreach (Part q in PiezasDe(bg))
-                {
-                    int ft;
-                    if (tipicoDe.TryGetValue(q.Identifier.ID, out ft) && ft == f) toca = true;
-                    une.Add(Marca(q));
-                }
-                if (toca) bulones[f].Add(bg.Identifier.ID);
-                else bulFuera[f].Add(string.Join("+", une.ToArray()));
+                foreach (Part q in PiezasDe(bg)) une.Add(Marca(q));
+                bulFuera[f].Add(string.Join("+", une.ToArray()));
             }
             foreach (int f in fases)
                 EscribirIds(f, creado, porFase[f], otraFase[f], fuera[f], bulones[f], bulFuera[f]);

@@ -649,7 +649,11 @@ def finalizar(args):
     if sin_sub:
         pass                       # sin submateriales: el CNC no va, no se controla
     elif cnc.get("FASE") != str(args.fase) or cnc.get("FIN") != "OK":
-        motivo = next((k + v for k, v in cnc.items() if k.startswith(("ERROR", "EXCEPCION"))), "")
+        # (2026-11-23) La macro escribe "ERROR: ..." sin "=", así que leer_kv no lo ve: se lee la línea tal cual.
+        motivo = ""
+        if os.path.isfile(ruta_cnc):
+            with open(ruta_cnc, encoding="utf-8-sig", errors="replace") as f:
+                motivo = next((l.strip() for l in f if l.startswith(("ERROR", "EXCEPCION"))), "")
         if args.retomar and "ya tiene archivos .nc1" in motivo:
             avisos.append("CNC: ya estaban de la vez anterior (retomar); se controlan contra los PDF.")
         else:
@@ -832,6 +836,9 @@ def cmd_planilla(args):
                     enviar[col] = float(val)
         if distintos:
             print("AVISO, la planilla tiene otro valor: " + " | ".join(distintos) + ("  → se reemplaza (--reemplazar)" if args.reemplazar else "  → no se toca (usar --reemplazar si corresponde)"))
+            if not args.reemplazar:
+                # (2026-11-23) La App lee esta línea y pregunta con un cartel Sí/No si se reemplaza.
+                print("PREGUNTA_REEMPLAZAR=" + " | ".join(distintos))
         if enviar:
             r = planilla.completar(pest, args.fase, enviar)
             print(f"  cargado: {r.get('escritos')}  reemplazado: {r.get('reemplazados')}")
