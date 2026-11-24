@@ -5,6 +5,8 @@ Versión 0.10 · 24/11/2026 · La mantiene MB
        - Si el peso o la pintura de la planilla son distintos a los del reporte, la app pregunta con un cartel
          si los reemplaza (Sí / No).
        - Retomar una exportación cortada ya no frena con "el CNC no terminó bien".
+       - Si en la Tekla de la obra no está la plantilla con "(1)" (ej. FMA_REPORTE_DE_SUBMATERIALES_NSM(1)),
+         se usa la misma sin el número (FMA_REPORTE_DE_SUBMATERIALES_NSM) y avisa. Pasaba en la 702Q.
        - IMPORTANTE: al abrir, la app pide instalar las macros nuevas de Tekla. Aceptá.
        - Para actualizar: cerrá la app y volvé a abrirla desde esta carpeta (debe decir versión 0.10).
        - Si el antivirus (Avast) la manda a cuarentena: es un falso positivo; restaurala y agregá la excepción.)

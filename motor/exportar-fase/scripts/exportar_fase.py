@@ -231,6 +231,15 @@ def lista_plantillas(obra, por_defecto=False):
     return p.get("obras", {}).get(obra, p["defecto"])
 
 
+def alternativas_plantilla(tpl):
+    """(2026-11-24) Nombres a probar para una plantilla, en orden. Si la plantilla termina en "(1)", "(2)"…
+    y esa no está en la Tekla de esta PC/obra, se usa la misma sin el número: NSM(1).csv → NSM.csv.
+    El archivo se guarda igual con el nombre pedido, así el resto del proceso no cambia."""
+    base, ext = os.path.splitext(tpl)
+    sin = re.sub(r"\s*\(\d+\)$", "", base)
+    return [tpl] + ([sin + ext] if sin != base else [])
+
+
 def elegidas_a_mano(obra):
     """True si la obra tiene reportes elegidos a mano (entonces un reporte que falta no frena)."""
     try:
