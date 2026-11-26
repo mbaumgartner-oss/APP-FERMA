@@ -1,5 +1,9 @@
 APP FERMA - Carga de fases (exportar, imprimir y subir)
-Versión 0.10 · 24/11/2026 · La mantiene MB
+Versión 0.11 · 26/11/2026 · La mantiene MB
+(0.11: - Submateriales sin plano (ej. bp, bend plate): si a algunos les falta el plano en Tekla, la app los lista
+         en un cartel y pregunta si seguís sin ellos. Con el sí, esas piezas no van (ni PDF ni CNC).
+         Un típico sin plano, o un plano sin revisión o desactualizado, sigue frenando.
+       - Para actualizar: cerrá la app y volvé a abrirla desde esta carpeta (debe decir versión 0.11).)
 (0.10: - Bulones: se toman como los sacamos a mano (filtro Conjunto · Fase): entran todos los bulones de los
          conjuntos de la fase, aunque el bulón tenga otra fase cargada. Antes podían salir "0 grupos de bulones".
        - Si el peso o la pintura de la planilla son distintos a los del reporte, la app pregunta con un cartel

@@ -50,6 +50,7 @@ SIN_CNC = re.compile(r"^\d+_gr[A-Z]")   # rejas / escalones de reja: se compran 
 CORREA_Z_TIP = re.compile(r"^CFZ", re.I)
 CORREA_Z_SUB = re.compile(r"^\d+_cfz", re.I)
 SIN_SUB_MARCA = "_sin_submateriales.txt"   # va en la carpeta temporal de la Skill (staging), nunca al Drive
+SIN_PLANO_MARCA = "_sin_plano.txt"         # submateriales sin plano que el modelador decidió no mandar (staging)
 BLOQUEO = "_EXPORTANDO.txt"
 PROBE_MAX_MIN = 5          # el log del modelo tiene que ser de recién
 BLOQUEO_MAX_H = 4          # un bloqueo de otra persona más viejo que esto se considera abandonado
@@ -546,14 +547,23 @@ def revisar(args):
             fo.write(f"FASE={args.fase}\nMOTIVO={'correas Z (CFZ)' if cfz else 'confirmado por el modelador'}\n"
                      f"PIEZAS_SIN_PLANO={','.join(subs)}\n")
         subs = []
+    # (2026-11-26) Submateriales sin plano (ej. bp, bend plate: a veces llevan plano y a veces no). No frena de una:
+    # se listan y el modelador decide si sigue sin ellos (--seguir-sin a,b). Los aceptados no van (ni PDF ni CNC).
+    marca_sp = os.path.join(staging(pr["OBRA"], args.fase), SIN_PLANO_MARCA)
+    if os.path.isfile(marca_sp):
+        os.remove(marca_sp)        # archivo propio de la Skill: se decide de nuevo en cada revisión
+    aceptadas = {x.strip() for x in (getattr(args, "seguir_sin", "") or "").split(",") if x.strip()}
     esperados = subs + tips
-    problemas = []
+    problemas, faltan_sub = [], []
     for m in esperados:
         if COMPRADOS.match(m):
             continue
         d = planos.get(m)
         if not d:
-            problemas.append(f"{m}: no tiene plano en Tekla")
+            if m in subs:
+                faltan_sub.append(m)
+            else:
+                problemas.append(f"{m}: no tiene plano en Tekla")
             continue
         if not str(d.get("revision_mark", "")).strip():
             problemas.append(f"{m}: sin revisión")
@@ -561,11 +571,22 @@ def revisar(args):
             problemas.append(f"{m}: plano no actualizado ({d.get('up_to_date_status')})")
     revs = sorted({f"rev {d.get('revision_mark')} · {d.get('user_properties', {}).get('text4_1', '?')}" for m, d in planos.items() if m in esperados})
     print(f"Planos controlados: {len(esperados)} ({', '.join(revs) or '-'})")
+    sin_decidir = [m for m in faltan_sub if m not in aceptadas]
     if problemas:
         print("FRENA:")
-        for p in problemas:
+        for p in problemas + [f"{m}: no tiene plano en Tekla" for m in sin_decidir]:
             print("  - " + p)
         return 1
+    if sin_decidir:
+        print(f"PREGUNTA: {len(faltan_sub)} submaterial(es) sin plano en Tekla: " + ", ".join(faltan_sub)
+              + ". ¿Se sigue sin ellos? Con el sí, repetir con --seguir-sin " + ",".join(faltan_sub))
+        print("PREGUNTA_SIN_PLANO=" + ",".join(faltan_sub))
+        return 4
+    if faltan_sub:
+        os.makedirs(os.path.dirname(marca_sp), exist_ok=True)
+        with open(marca_sp, "w", encoding="utf-8") as fo:
+            fo.write(f"FASE={args.fase}\nPIEZAS={','.join(faltan_sub)}\n")
+        print("AVISO: submateriales sin plano que NO van (decidido por el modelador): " + ", ".join(faltan_sub))
     print("OK: todos con revisión y actualizados.")
     return 0
 
@@ -644,6 +665,21 @@ def finalizar(args):
             shutil.move(d_cnc, os.path.join(aparte, "CNC"))
             os.makedirs(d_cnc, exist_ok=True)
             print(f"  El CNC que salió de la macro quedó aparte (no va): {aparte}")
+    # (2026-11-26) Submateriales sin plano que el modelador decidió no mandar: su CNC se aparta (no se borra) y no
+    # se exigen en los controles.
+    sin_plano = leer_kv(os.path.join(staging(pr["OBRA"], args.fase), SIN_PLANO_MARCA))
+    sin_plano = {x for x in sin_plano.get("PIEZAS", "").split(",") if x} if sin_plano.get("FASE") == str(args.fase) else set()
+    if sin_plano:
+        print("Submateriales sin plano que NO van (decidido por el modelador): " + ", ".join(sorted(sin_plano)))
+        d_cnc = os.path.join(wdir, "CNC")
+        mover = [x for x in (os.listdir(d_cnc) if os.path.isdir(d_cnc) else [])
+                 if os.path.splitext(x)[0] in sin_plano and x.lower().endswith(".nc1")]
+        if mover:
+            aparte = os.path.join(wdir + " (CNC que no va, sin plano " + datetime.now().strftime("%Y-%m-%d %H%M%S") + ")", "CNC")
+            os.makedirs(aparte, exist_ok=True)
+            for x in mover:
+                shutil.move(os.path.join(d_cnc, x), os.path.join(aparte, x))
+            print(f"  Su CNC quedó aparte (no va): {os.path.dirname(aparte)}")
 
     # (4) Lo que dicen las macros: planos sin actualizar, errores de PDF, CNC que no salieron.
     pdf, ruta_pdf = log_fase("imprimir_pdf_log", args.fase)
@@ -717,7 +753,10 @@ def finalizar(args):
         avisos.append(f"{len(fuera)} pieza(s) o bulón(es) tienen la fase {args.fase} pero son de típicos de otra fase (NO van): "
                       + ", ".join(fuera[:15]) + (" …" if len(fuera) > 15 else ""))
     # (3) piezas del reporte de submateriales contra lo exportado
-    pzs = {m for m in marcas_reporte(wdir, "SUBMATERIALES") if not COMPRADOS.match(m)}
+    pzs = {m for m in marcas_reporte(wdir, "SUBMATERIALES") if not COMPRADOS.match(m)} - sin_plano
+    if sin_plano:
+        avisos.append(f"{len(sin_plano)} submaterial(es) del reporte sin plano NO van (decidido por el modelador): "
+                      + ", ".join(sorted(sin_plano)))
     if sin_sub:
         if sub:
             errores.append("la fase se marcó sin submateriales pero salieron PDF de submateriales: " + ", ".join(sub[:15]))
@@ -960,6 +999,8 @@ def _main():
             s.add_argument("--json", required=True, help="respuesta de get_drawings_properties guardada en un archivo")
             s.add_argument("--sin-submateriales", action="store_true",
                            help="el modelador confirmó que la fase no lleva submateriales (solo típicos, sin CNC)")
+            s.add_argument("--seguir-sin", default="",
+                           help="submateriales sin plano que el modelador acepta no mandar (a,b,c): no van ni PDF ni CNC")
         if nombre == "planilla":
             s.add_argument("--completar", action="store_true", help="carga PESO y M2 del reporte si están vacíos")
             s.add_argument("--reemplazar", action="store_true", help="pisa PESO/M2 aunque la planilla tenga otro valor")
